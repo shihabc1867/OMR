@@ -1,0 +1,223 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>OMR Scanner</title>
+<link rel="manifest" href="manifest.json">
+<link rel="icon" href="icon-192.png">
+<link rel="apple-touch-icon" href="icon-192.png">
+<meta name="theme-color" content="#0f766e">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<style>
+*{box-sizing:border-box}
+body{margin:0;font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;background:#f1f5f9;color:#0f172a}
+header{background:#0f766e;color:#fff;padding:12px 14px;display:flex;justify-content:space-between;align-items:center}
+header h1{font-size:18px;margin:0}
+nav{display:flex;background:#fff;border-bottom:1px solid #e2e8f0;position:sticky;top:0;z-index:5;overflow-x:auto}
+nav button{flex:1;min-width:64px;padding:12px 6px;border:0;background:none;font:inherit;font-size:14px;border-bottom:3px solid transparent;color:#334155;white-space:nowrap}
+nav button.on{color:#0f766e;border-color:#0f766e;font-weight:700}
+main{padding:12px;max-width:820px;margin:auto}
+section{display:none}section.on{display:block}
+.card{background:#fff;border-radius:12px;padding:12px;margin-bottom:12px;box-shadow:0 1px 3px #0001}
+label{display:block;font-size:13px;margin:8px 0 3px;color:#475569}
+input,select{width:100%;padding:10px;border:1px solid #cbd5e1;border-radius:8px;font:inherit;font-size:15px;background:#fff}
+input[type=range]{padding:0}
+button.b{padding:11px 14px;border:0;border-radius:8px;background:#0f766e;color:#fff;font:inherit;font-size:15px;margin:6px 6px 0 0;cursor:pointer}
+button.b.alt{background:#475569}button.b.red{background:#dc2626}
+button.b.tm{background:#e2e8f0;color:#0f172a}button.b.tm.on{background:#f59e0b;color:#000}
+button.b.sm{padding:6px 10px;font-size:13px;margin:0}
+.cvwrap{overflow:auto;max-height:72vh;border:1px solid #cbd5e1;border-radius:8px;background:#fff;-webkit-overflow-scrolling:touch}
+canvas{display:block;width:100%;height:auto}
+.zoom{display:flex;align-items:center;gap:8px;margin:0 0 6px;font-size:13px;color:#475569;flex-wrap:wrap}
+.zoom button.z{width:36px;height:34px;border:1px solid #cbd5e1;border-radius:8px;background:#fff;font-size:18px}
+.big{font-size:30px;font-weight:800;color:#0f766e}
+.row{display:flex;justify-content:space-between;padding:7px 0;border-bottom:1px dashed #e2e8f0}
+.msg{font-size:13px;color:#b45309;margin:8px 0 0}
+.ok{color:#0f766e}
+.hint{font-size:12px;color:#64748b;margin:6px 0}
+.legend span{display:inline-block;width:12px;height:12px;border-radius:50%;vertical-align:middle;margin:0 3px 0 8px}
+.item{display:flex;justify-content:space-between;align-items:center;padding:9px 0;border-bottom:1px solid #e2e8f0;gap:8px}
+.item small{color:#64748b;display:block}
+.two{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+#cornerOv{position:fixed;inset:0;background:#0f172af2;z-index:50;overflow:auto;padding:10px;display:none}
+#cornerOv.on{display:block}
+#cornerOv .box{max-width:760px;margin:auto}
+#cornerOv p{color:#e2e8f0;font-size:13px;margin:4px 0 8px}
+#cornerCv{touch-action:none;border-radius:8px;background:#000}
+</style>
+</head>
+<body>
+<header><h1>OMR Scanner</h1><button id="installBtn" class="b" hidden>⬇ Install</button></header>
+<nav>
+  <button data-v="key" class="on">Answer Key</button>
+  <button data-v="scan">Scan</button>
+  <button data-v="res">Results</button>
+  <button data-v="tpl">Sheets</button>
+  <button data-v="set">Settings</button>
+</nav>
+<main>
+
+<!-- ANSWER KEY -->
+<section id="v-key" class="on">
+  <div class="card">
+    <label>Saved answer keys</label>
+    <select id="keySel"></select>
+    <label>Answer key name</label>
+    <input id="keyName" placeholder="e.g. Model Test 1">
+    <label>OMR sheet type</label>
+    <select id="keyTpl"></select>
+    <p class="hint">Tap the correct option for each question you want to score (any number of questions). Questions left empty are not counted. Use zoom (+) if the bubbles look small.</p>
+    <div id="keyCount" class="hint"></div>
+    <button class="b" id="keySave">💾 Save</button>
+    <button class="b alt" id="keyClear">Clear all</button>
+    <button class="b red" id="keyDel">Delete</button>
+    <div id="keyMsg" class="msg"></div>
+  </div>
+  <div class="zoom" data-for="keyCv"><button class="z" data-d="-1">−</button><span>Zoom</span><button class="z" data-d="1">＋</button></div>
+  <div class="cvwrap"><canvas id="keyCv"></canvas></div>
+</section>
+
+<!-- SCAN -->
+<section id="v-scan">
+  <div class="card">
+    <label>Answer key to grade against</label>
+    <select id="scanKey"></select>
+    <label>Student name / roll</label>
+    <input id="stuName" placeholder="Name or roll number">
+    <button class="b" id="camBtn">📷 Take photo of answer sheet</button>
+    <button class="b alt" id="galBtn">🖼 Choose from gallery</button>
+    <input type="file" id="camIn" accept="image/*" capture="environment" hidden>
+    <input type="file" id="galIn" accept="image/*" hidden>
+    <div id="scanMsg" class="msg"></div>
+  </div>
+
+  <div id="scanArea" hidden>
+    <div class="hint legend">
+      <span style="background:#60a5fa88;border:2px solid #2563eb"></span>Detected / entered
+      <span style="background:#fbbf2488;border:2px solid #d97706"></span>Multiple marks
+      <span style="background:#4ade8088;border:2px solid #16a34a"></span>Correct
+      <span style="background:#f8717188;border:2px solid #dc2626"></span>Wrong
+    </div>
+    <div class="zoom" data-for="scanCv">
+      <button class="z" data-d="-1">−</button><span>Zoom</span><button class="z" data-d="1">＋</button>
+      <button class="b alt sm" id="rotBtn">↻ Rotate</button>
+      <button class="b alt sm" id="cornBtn">⌖ Adjust corners</button>
+    </div>
+    <div class="cvwrap" id="scanWrap"><canvas id="scanCv"></canvas></div>
+    <p class="hint">If a bubble was missed or detected wrongly, tap that option to fix it. Tap again to remove the circle.</p>
+
+    <div class="card">
+      <button class="b tm" id="timerBtn"></button>
+      <button class="b" id="submitBtn">✅ Submit</button>
+    </div>
+
+    <div id="resBox" class="card" hidden>
+      <div class="row"><span>Correct</span><b id="rC"></b></div>
+      <div class="row"><span>Wrong</span><b id="rW"></b></div>
+      <div class="row"><span>Unanswered</span><b id="rB"></b></div>
+      <div class="row"><span>Total marks</span><b id="rM"></b></div>
+      <div class="row"><span>Wrong-answer penalty</span><b id="rN"></b></div>
+      <div class="row"><span>Second Timer penalty</span><b id="rT"></b></div>
+      <div style="text-align:center;margin:12px 0 4px">Score<div class="big" id="rF"></div></div>
+      <div class="hint" id="rS" style="text-align:center"></div>
+    </div>
+  </div>
+</section>
+
+<!-- RESULTS -->
+<section id="v-res">
+  <div class="card">
+    <button class="b alt" id="resSync">🔄 Refresh from server</button>
+    <button class="b alt" id="resCsv">⬇ Download CSV</button>
+    <div id="resList"></div>
+  </div>
+</section>
+
+<!-- SHEETS / TEMPLATES -->
+<section id="v-tpl">
+  <div class="card">
+    <b>Your OMR sheet types</b>
+    <div id="tplList"></div>
+    <button class="b alt" id="sheetDl">⬇ Download built-in blank sheet (to print)</button>
+  </div>
+
+  <div class="card" id="wizStart">
+    <b>Add any OMR sheet</b>
+    <p class="hint">Take a clear photo of a <b>blank</b> (unmarked) copy of your OMR sheet. The app finds every bubble and learns the layout. Works for any number of questions, columns, or options. You can fix anything it gets wrong before saving.</p>
+    <button class="b" id="wizCam">📷 Photo of blank sheet</button>
+    <button class="b alt" id="wizGal">🖼 Choose from gallery</button>
+    <input type="file" id="wizCamIn" accept="image/*" capture="environment" hidden>
+    <input type="file" id="wizGalIn" accept="image/*" hidden>
+    <div id="wizMsg" class="msg"></div>
+  </div>
+
+  <div class="card" id="wizEdit" hidden>
+    <b>Check the detected layout</b>
+    <div id="wizInfo" class="hint"></div>
+    <div class="two">
+      <div><label>Options per question</label>
+        <select id="wK"><option value="0">Auto-detect</option><option>2</option><option>3</option><option>4</option><option>5</option><option>6</option><option>7</option><option>8</option><option>10</option></select></div>
+      <div><label>Options run</label>
+        <select id="wDir"><option value="0">Left → right (across)</option><option value="1">Top → bottom (down)</option></select></div>
+      <div><label>Question numbering</label>
+        <select id="wNum">
+          <option value="col">Down each column, then next column</option>
+          <option value="row">Across each row</option>
+          <option value="block">By blocks (block by block, band by band)</option>
+        </select></div>
+      <div><label>Option labels</label>
+        <select id="wLab"><option value="A">A B C D …</option><option value="a">a b c d …</option><option value="1">1 2 3 4 …</option></select></div>
+    </div>
+    <label>Detection sensitivity (higher finds fainter bubble outlines)</label>
+    <input type="range" id="wSens" min="0.75" max="0.95" step="0.01" value="0.85">
+    <label>Sheet name</label>
+    <input id="wName" placeholder="e.g. School Exam Sheet 50Q">
+    <p class="hint">Red circles = detected bubbles with their question number. Tap a bubble to remove a false detection; tap an empty spot to add a missed bubble.</p>
+    <div class="zoom" data-for="wizCv"><button class="z" data-d="-1">−</button><span>Zoom</span><button class="z" data-d="1">＋</button>
+      <button class="b alt sm" id="wUndo">↶ Undo</button><button class="b alt sm" id="wCorn">⌖ Adjust corners</button></div>
+    <div class="cvwrap"><canvas id="wizCv"></canvas></div>
+    <button class="b" id="wSave">💾 Save sheet type</button>
+    <button class="b alt" id="wCancel">Cancel</button>
+    <div id="wMsg" class="msg"></div>
+  </div>
+</section>
+
+<!-- SETTINGS -->
+<section id="v-set">
+  <div class="card">
+    <p class="hint">An admin PIN is required to change settings. (Initial PIN: 1234 — change it first.)</p>
+    <label>Admin PIN</label><input id="sPin" type="password" inputmode="numeric">
+    <label>Marks per correct answer</label><input id="sPer" type="number" step="0.01">
+    <label>Penalty per wrong answer</label><input id="sNeg" type="number" step="0.01">
+    <label>Second Timer penalty (% of total marks)</label><input id="sTim" type="number" step="0.1">
+    <label>Mark detection threshold (0.05–0.5; lower detects fainter marks)</label><input id="sThr" type="number" step="0.01">
+    <label>Apps Script Web App URL (optional — cloud sync)</label><input id="sUrl" placeholder="https://script.google.com/macros/s/.../exec">
+    <label>New PIN (leave empty to keep)</label><input id="sNewPin" type="password" inputmode="numeric">
+    <button class="b" id="sSave">💾 Save</button>
+    <div id="sMsg" class="msg"></div>
+  </div>
+  <div class="card">
+    <b>Install the app</b>
+    <p class="hint">Android / Chrome: use the “Install” button at the top, or the browser menu → “Install app / Add to Home screen”.</p>
+    <p class="hint" id="iosHint" hidden>iPhone: in Safari tap Share → “Add to Home Screen”.</p>
+  </div>
+</section>
+
+</main>
+
+<!-- Corner editor overlay -->
+<div id="cornerOv"><div class="box">
+  <p id="cornerHint"></p>
+  <canvas id="cornerCv"></canvas>
+  <div>
+    <button class="b" id="cornerOk">✔ Done</button>
+    <button class="b alt" id="cornerRot">↻ Rotate corner labels</button>
+    <button class="b red" id="cornerCancel">Cancel</button>
+  </div>
+</div></div>
+
+<script src="omr-core.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
