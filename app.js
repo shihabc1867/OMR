@@ -277,6 +277,23 @@
     try { const p = await loadPhoto(file, 2200); sc = { photo: p, rot: undefined, pts: null, manual: new Set(), rid: null }; setTimeout(runScan, 30); }
     catch (e) { smsg('Error: ' + e.message); }
   }
+  // An older sheet type that was saved without the corner-square positions: after one good manual alignment,
+  // find the squares in this photo, express them in template coordinates and keep them, so the next scan lines up by itself.
+  function learnMarkers(tpl, p, r) {
+    try {
+      if (tpl.builtin || tpl.mk || r.how !== 'manual' || !(r.fit >= 0.25)) return;
+      const m = OMR.findMarkers(OMR.toGray(p.rgba, p.w, p.h), p.w, p.h);
+      const Hi = OMR.homography(r.quad, tpl.ref);
+      if (!m || !Hi) return;
+      const ap = q => { const d = Hi[6] * q[0] + Hi[7] * q[1] + 1; return [(Hi[0] * q[0] + Hi[1] * q[1] + Hi[2]) / d, (Hi[3] * q[0] + Hi[4] * q[1] + Hi[5]) / d]; };
+      const t = OMR.orderQuad(m.map(ap)), W = tpl.W, H = tpl.H;
+      if (t.some(q => q[0] < -0.35 * W || q[0] > 1.35 * W || q[1] < -0.35 * H || q[1] > 1.35 * H)) return;
+      let ar = 0; for (let i = 0; i < 4; i++) { const u = t[i], v = t[(i + 1) % 4]; ar += u[0] * v[1] - v[0] * u[1]; }
+      if (Math.abs(ar) / 2 < 0.5 * W * H) return;
+      tpl.mk = t; if (tpl.align !== 'page') tpl.align = 'markers';
+      if (saveTpls()) setTimeout(() => smsg('✔ Corner squares learned for this sheet type — next time the photo will line up automatically.', true), 50);
+    } catch (e) { /* ignore */ }
+  }
   function runScan() {
     const tpl = scanTplObj(), p = sc.photo;
     const r = OMR.scanTpl(p.rgba, p.w, p.h, tpl, { pts: sc.pts || undefined, rot: sc.pts ? undefined : sc.rot });
@@ -286,7 +303,8 @@
       openCorners(p, quad, cornerHint(tpl), pts => { sc.pts = pts; sc.lastQuad = pts; runScan(); });
       return;
     }
-    sc.rot = r.rot; sc.res = r; sc.lastQuad = r.quad; const A = OMR.analyze(r.dark, r.fill, { thr: S.thr, fillMin: (S.fillPct || 70) / 100 });
+    learnMarkers(tpl, p, r);
+    sc.rot = r.rot; sc.res = r; sc.lastQuad = r.quad; const A = OMR.analyze(r.dark, r.fill, { thr: S.thr, fillMin: (S.fillPct || 70) / 100 }, r.raw);
     sc.sel = A.sel; sc.bad = new Set(); A.bad.forEach((b, q) => { if (b) sc.bad.add(q); }); sc.manual = new Set();
     sc.img = new ImageData(r.warped, tpl.W, tpl.H);
     submitted = false; $('#resBox').hidden = true; scanCv.width = tpl.W; scanCv.height = tpl.H;
@@ -416,7 +434,7 @@
     const f = e.target.files[0]; e.target.value = ''; if (!f) return;
     wmsg('Loading photo…', true);
     try {
-      const p = await loadPhoto(f, 1800);
+      const p = await loadPhoto(f, 2200);
       const a = OMR.alignPhoto(OMR.toGray(p.rgba, p.w, p.h), p.w, p.h, 'auto');
       wiz = { photo: p, auto: a, pts: a ? a.pts : insetQuad(p.w, p.h), how: a ? a.how : 'manual', sens: 0.85, list: [], rx: 10, ry: 10 };
       wmsg(a ? 'Found the sheet (' + (a.how === 'markers' ? 'corner squares' : 'paper edges') + '). Check the four corners, then tap Done.' : 'Could not find the sheet automatically — place the four handles on the sheet corners.', true);
@@ -427,9 +445,25 @@
     } catch (err) { wmsg('Error: ' + err.message); }
   };
   function wizOpts() { return { k: +$('#wK').value || 0, transpose: $('#wDir').value === '1', numbering: $('#wNum').value }; }
+  // Find the black corner squares in the blank photo and express them in template coordinates,
+  // so the scanner can line the sheet up on the squares even if the template corners were placed somewhere else.
+  function wizMarkers() {
+    try {
+      const p = wiz.photo, m = OMR.findMarkers(OMR.toGray(p.rgba, p.w, p.h), p.w, p.h);
+      const Hi = OMR.homography(wiz.pts, wiz.base.ref);
+      if (!m || !Hi) return null;
+      const ap = q => { const d = Hi[6] * q[0] + Hi[7] * q[1] + 1; return [(Hi[0] * q[0] + Hi[1] * q[1] + Hi[2]) / d, (Hi[3] * q[0] + Hi[4] * q[1] + Hi[5]) / d]; };
+      const t = OMR.orderQuad(m.map(ap)), W = wiz.base.W, H = wiz.base.H;
+      if (t.some(q => q[0] < -0.35 * W || q[0] > 1.35 * W || q[1] < -0.35 * H || q[1] > 1.35 * H)) return null;
+      let ar = 0; for (let i = 0; i < 4; i++) { const u = t[i], v = t[(i + 1) % 4]; ar += u[0] * v[1] - v[0] * u[1]; }
+      if (Math.abs(ar) / 2 < 0.5 * W * H) return null;
+      return t;
+    } catch (e) { return null; }
+  }
   function wizBuild(detect) {
     const p = wiz.photo;
     wiz.base = OMR.templateBase(p.rgba, p.w, p.h, wiz.pts, 1200);
+    wiz.mk = wizMarkers();
     if (!wiz.base) { wmsg('The corners are not valid. Adjust them and try again.'); return; }
     if (detect) {
       const det = OMR.detectBubbles(wiz.base.gray, wiz.base.W, wiz.base.H, wiz.sens);
@@ -489,7 +523,7 @@
     const name = $('#wName').value.trim() || 'Sheet ' + (customTpls.length + 1);
     const maxK = Math.max.apply(null, wiz.groups.map(g => g.pts.length)), lab = $('#wLab').value;
     const labels = []; for (let o = 0; o < maxK; o++) labels.push(lab === '1' ? String(o + 1) : String.fromCharCode((lab === 'a' ? 97 : 65) + o));
-    const tpl = OMR.makeTemplate(wiz.base, { rx: wiz.rx, ry: wiz.ry }, wiz.groups, { id: 't' + Date.now(), name, align: wiz.align || 'manual', labels });
+    const tpl = OMR.makeTemplate(wiz.base, { rx: wiz.rx, ry: wiz.ry }, wiz.groups, { id: 't' + Date.now(), name, align: wiz.mk ? (wiz.align === 'page' ? 'auto' : 'markers') : (wiz.align || 'manual'), mk: wiz.mk || null, labels });
     customTpls.push(tpl);
     if (!saveTpls()) { customTpls.pop(); m.textContent = 'Could not save (device storage is full).'; return; }
     fillSelects(); renderTplList();
