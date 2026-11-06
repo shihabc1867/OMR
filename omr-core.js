@@ -7,17 +7,17 @@
 (function (root) {
   'use strict';
 
-  // ---------- The app's own 100-question sheet ----------
-  const C = { W: 1000, H: 1450, ROWS: 25, COLS: 4, OPT: 4, MK: 40, GX0: 80, COLW: 205, GY0: 235, RH: 46, BX0: 50, BDX: 38, BR: 13 };
-  const MARKERS = [[50, 50], [950, 50], [950, 1400], [50, 1400]]; // TL, TR, BR, BL
+  // ---------- The app's own 100-question sheet (landscape, 4 columns x 25 rows, options a b c d) ----------
+  const C = { W: 1440, H: 1066, ROWS: 25, COLS: 4, OPT: 4, MK: 44, GX0: 152, COLW: 356, GY0: 66, RH: 38, BDX: 40, BR: 15 };
+  const MARKERS = [[34, 26], [1406, 26], [1406, 1040], [34, 1040]]; // TL, TR, BR, BL
   function bubble(q, o) {
     const c = Math.floor(q / C.ROWS), r = q % C.ROWS;
-    return [C.GX0 + c * C.COLW + C.BX0 + o * C.BDX, C.GY0 + r * C.RH];
+    return [C.GX0 + c * C.COLW + o * C.BDX, C.GY0 + r * C.RH];
   }
   function builtinTemplate() {
     const groups = [];
     for (let q = 0; q < C.ROWS * C.COLS; q++) { const pts = []; for (let o = 0; o < C.OPT; o++) pts.push(bubble(q, o)); groups.push({ pts }); }
-    return { id: 'builtin', name: 'Built-in sheet (100 questions)', W: C.W, H: C.H, ref: MARKERS, align: 'markers', rx: C.BR, ry: C.BR, labels: ['A', 'B', 'C', 'D'], groups, builtin: true };
+    return { id: 'builtin', name: 'Built-in sheet (100 questions)', W: C.W, H: C.H, ref: MARKERS, align: 'markers', rx: C.BR, ry: C.BR, labels: ['a', 'b', 'c', 'd'], groups, builtin: true };
   }
 
   // ---------- Small helpers ----------
@@ -126,7 +126,7 @@
   // ---------- Corner detection 1: black corner markers ----------
   function findMarkers(gray, w, h) {
     const mask = adaptiveMask(gray, w, h, Math.max(15, Math.round(Math.max(w, h) / 16)), 0.55);
-    const big = Math.max(w, h), minS = big * 0.012, maxS = big * 0.14, cands = [];
+    const big = Math.max(w, h), minS = big * 0.009, maxS = big * 0.14, cands = [];
     for (const k of components(mask, w, h, false)) {
       const bw = k.maxx - k.minx + 1, bh = k.maxy - k.miny + 1;
       if (bw < minS || bh < minS || bw > maxS || bh > maxS) continue;
@@ -314,47 +314,34 @@
     return { W, H: Hh, ref, warped, gray: toGray(warped, W, Hh) };
   }
 
-  // True when the empty centre of a component is fully enclosed by it (cannot be reached from outside its bounding box)
-  function closedRing(mask, W, H, k) {
-    const x0 = Math.max(0, k.minx - 1), x1 = Math.min(W - 1, k.maxx + 1), y0 = Math.max(0, k.miny - 1), y1 = Math.min(H - 1, k.maxy + 1);
-    const bw = x1 - x0 + 1, bh = y1 - y0 + 1, seen = new Uint8Array(bw * bh), st = [];
-    const push = (x, y) => { const i = (y - y0) * bw + (x - x0); if (!seen[i] && !mask[y * W + x]) { seen[i] = 1; st.push(x, y); } };
-    for (let x = x0; x <= x1; x++) { push(x, y0); push(x, y1); }
-    for (let y = y0; y <= y1; y++) { push(x0, y); push(x1, y); }
-    while (st.length) {
-      const y = st.pop(), x = st.pop();
-      if (x > x0) push(x - 1, y); if (x < x1) push(x + 1, y); if (y > y0) push(x, y - 1); if (y < y1) push(x, y + 1);
-    }
-    // Enclosed empty pixels in the central area (a small printed letter inside the bubble is allowed)
-    const w0 = k.maxx - k.minx + 1, h0 = k.maxy - k.miny + 1;
-    const ax = k.minx + Math.floor(w0 * 0.3), bx = k.maxx - Math.floor(w0 * 0.3), ay = k.miny + Math.floor(h0 * 0.3), by = k.maxy - Math.floor(h0 * 0.3);
-    let empty = 0, tot = 0;
-    for (let y = ay; y <= by; y++) for (let x = ax; x <= bx; x++) { tot++; if (!seen[(y - y0) * bw + (x - x0)] && !mask[y * W + x]) empty++; }
-    return tot > 0 && empty / tot >= 0.25;
-  }
-
-  // Find hollow circles on the straightened blank sheet
+  // Find hollow circles on the straightened blank sheet.
+  // Method: the bright INSIDE of every bubble is a small, separate "hole" in the ink mask. Looking for the holes (instead of the
+  // outlines) keeps neighbouring bubbles apart even when their outlines almost touch, and printed letters inside the bubble do not matter.
   function detectBubbles(g, W, H, sens) {
-    const m1 = adaptiveMask(g, W, H, Math.max(15, Math.round(W / 30)), sens || 0.85);
-    const m2 = new Uint8Array(W * H);
-    for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
-      if (!m1[y * W + x]) continue;
-      for (let dy = -1; dy <= 1; dy++) { const yy = y + dy; if (yy < 0 || yy >= H) continue;
-        for (let dx = -1; dx <= 1; dx++) { const xx = x + dx; if (xx >= 0 && xx < W) m2[yy * W + xx] = 1; } }
-    }
-    const lo = W * 0.008, hi = W * 0.05, cand = [];
-    for (const k of components(m2, W, H, true)) {
+    const ink = adaptiveMask(g, W, H, Math.max(15, Math.round(W / 30)), sens || 0.85);
+    const inv = new Uint8Array(W * H);
+    for (let i = 0; i < inv.length; i++) inv[i] = ink[i] ? 0 : 1;
+    const lo = W * 0.005, hi = W * 0.045, cand = [];
+    const run = (x, y, dx, dy) => { let n = 0; x += dx; y += dy; while (n < 14 && x >= 0 && y >= 0 && x < W && y < H && ink[y * W + x]) { n++; x += dx; y += dy; } return n; };
+    for (const k of components(inv, W, H, false)) {
       const bw = k.maxx - k.minx + 1, bh = k.maxy - k.miny + 1;
       if (bw < lo || bh < lo || bw > hi || bh > hi) continue;
-      const ar = bw / bh; if (ar < 0.4 || ar > 2.5) continue;
-      if (k.cnt / (bw * bh) > 0.9) continue;
-      // Hollow check: the middle area must be mostly empty
-      const cx0 = k.minx + Math.floor(bw * 0.3), cx1 = k.maxx - Math.floor(bw * 0.3), cy0 = k.miny + Math.floor(bh * 0.3), cy1 = k.maxy - Math.floor(bh * 0.3);
-      let dark = 0, n = 0;
-      for (let y = cy0; y <= cy1; y++) for (let x = cx0; x <= cx1; x++) { n++; if (m1[y * W + x]) dark++; }
-      if (n && dark / n > 0.45) continue;
-      if (!closedRing(m2, W, H, k)) continue; // letters such as S, C, H, L are open shapes; a bubble outline is a closed ring
-      cand.push({ x: (k.minx + k.maxx) / 2, y: (k.miny + k.maxy) / 2, w: bw, h: bh });
+      const ar = bw / bh; if (ar < 0.5 || ar > 2) continue;
+      const fill = k.cnt / (bw * bh); if (fill < 0.3 || fill > 0.95) continue;
+      const cx = (k.minx + k.maxx) / 2, cy = (k.miny + k.maxy) / 2;
+      // The hole must be surrounded by ink all around (a real outline), not just a gap between letters
+      let hitN = 0, tot = 0;
+      for (let a = 0; a < 24; a++) {
+        const t = a * Math.PI / 12, px = Math.round(cx + (bw / 2 + 1.5) * Math.cos(t)), py = Math.round(cy + (bh / 2 + 1.5) * Math.sin(t));
+        let yes = 0;
+        for (let dy = -2; dy <= 2 && !yes; dy++) for (let dx = -2; dx <= 2; dx++) { const xx = px + dx, yy = py + dy; if (xx >= 0 && yy >= 0 && xx < W && yy < H && ink[yy * W + xx]) { yes = 1; break; } }
+        hitN += yes; tot++;
+      }
+      if (hitN / tot < 0.85) continue;
+      // Outline thickness (average ink run on the four sides)
+      const th = (run(k.maxx, Math.round(cy), 1, 0) + run(k.minx, Math.round(cy), -1, 0) + run(Math.round(cx), k.miny, 0, -1) + run(Math.round(cx), k.maxy, 0, 1)) / 4;
+      const t = Math.max(1, th);
+      cand.push({ x: cx, y: cy, w: bw + 2 * t + 2, h: bh + 2 * t + 2 });
     }
     if (cand.length < 4) return null;
     // Dominant size (histogram peak)
@@ -371,7 +358,7 @@
     const sup = keep.filter(b => keep.some(o => {
       if (o === b) return false;
       const dx = Math.abs(o.x - b.x), dy = Math.abs(o.y - b.y);
-      const row = dy <= 0.35 * mh && dx >= 1.25 * mw && dx <= 6 * mw, col = dx <= 0.35 * mw && dy >= 1.25 * mh && dy <= 6 * mh;
+      const row = dy <= 0.35 * mh && dx >= 1.05 * mw && dx <= 6 * mw, col = dx <= 0.35 * mw && dy >= 1.05 * mh && dy <= 6 * mh;
       return row || col;
     }));
     if (sup.length < 4) return null;
