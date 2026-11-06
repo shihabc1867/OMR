@@ -95,7 +95,7 @@ canvas{display:block;width:100%;height:auto}
   <div id="scanArea" hidden>
     <div class="hint legend">
       <span style="background:#60a5fa88;border:2px solid #2563eb"></span>Detected / entered
-      <span style="background:#fbbf2488;border:2px solid #d97706"></span>Multiple marks
+      <span style="background:#fbbf2488;border:2px solid #d97706"></span>Multiple / partial mark (counts wrong)
       <span style="background:#4ade8088;border:2px solid #16a34a"></span>Correct
       <span style="background:#f8717188;border:2px solid #dc2626"></span>Wrong
     </div>
@@ -192,6 +192,7 @@ canvas{display:block;width:100%;height:auto}
     <label>Penalty per wrong answer</label><input id="sNeg" type="number" step="0.01">
     <label>Second Timer penalty (% of total marks)</label><input id="sTim" type="number" step="0.1">
     <label>Mark detection threshold (0.05–0.5; lower detects fainter marks)</label><input id="sThr" type="number" step="0.01">
+    <label>Minimum fill % for a valid answer (30–95; a bubble filled less than this counts as partial = wrong)</label><input id="sFill" type="number" step="1">
     <label>Apps Script Web App URL (optional — cloud sync)</label><input id="sUrl" placeholder="https://script.google.com/macros/s/.../exec">
     <label>New PIN (leave empty to keep)</label><input id="sNewPin" type="password" inputmode="numeric">
     <button class="b" id="sSave">💾 Save</button>
