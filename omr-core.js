@@ -124,32 +124,81 @@
   }
 
   // ---------- Corner detection 1: black corner markers ----------
-  function findMarkers(gray, w, h) {
-    const mask = adaptiveMask(gray, w, h, Math.max(15, Math.round(Math.max(w, h) / 16)), 0.55);
-    const big = Math.max(w, h), minS = big * 0.009, maxS = big * 0.14, cands = [];
-    for (const k of components(mask, w, h, false)) {
+  // Separable box filter on a binary mask. needAll=true -> erosion, false -> dilation
+  function boxPass(src, w, h, r, horiz, needAll) {
+    const out = new Uint8Array(w * h), lines = horiz ? h : w, len = horiz ? w : h, ls = horiz ? w : 1, es = horiz ? 1 : w;
+    const p = new Int32Array(len + 1), full = 2 * r + 1;
+    for (let l = 0; l < lines; l++) {
+      const base = l * ls;
+      for (let i = 0; i < len; i++) p[i + 1] = p[i] + src[base + i * es];
+      for (let i = 0; i < len; i++) {
+        const i0 = i - r, i1 = i + r;
+        if (needAll) { if (i0 >= 0 && i1 < len && p[i1 + 1] - p[i0] === full) out[base + i * es] = 1; }
+        else { const x0 = Math.max(0, i0), x1 = Math.min(len - 1, i1); if (p[x1 + 1] - p[x0] > 0) out[base + i * es] = 1; }
+      }
+    }
+    return out;
+  }
+  // Opening = erosion then dilation: removes thin lines/text strokes/page borders and keeps solid blocks (the black squares)
+  function openMask(m, w, h, r) {
+    let t = boxPass(m, w, h, r, true, true); t = boxPass(t, w, h, r, false, true);
+    t = boxPass(t, w, h, r, true, false); return boxPass(t, w, h, r, false, false);
+  }
+  function markerCands(gray, w, h, half, factor) {
+    const big = Math.max(w, h), mask = adaptiveMask(gray, w, h, half, factor);
+    const r = Math.max(1, Math.min(4, Math.round(big * 0.0012))), op = openMask(mask, w, h, r);
+    const minS = Math.max(6, big * 0.0045), maxS = big * 0.14, cands = [];
+    for (const k of components(op, w, h, false)) {
       const bw = k.maxx - k.minx + 1, bh = k.maxy - k.miny + 1;
       if (bw < minS || bh < minS || bw > maxS || bh > maxS) continue;
       const ar = bw / bh; if (ar < 0.55 || ar > 1.8) continue;
-      const fill = k.cnt / (bw * bh); if (fill < 0.65) continue;
+      const fill = k.cnt / (bw * bh); if (fill < 0.7) continue;
+      // Isolation: a corner square has plain paper around it (no big dark neighbours)
+      const pad = Math.max(3, Math.round(Math.max(bw, bh) * 0.5)), x0 = Math.max(0, k.minx - pad), x1 = Math.min(w - 1, k.maxx + pad), y0 = Math.max(0, k.miny - pad), y1 = Math.min(h - 1, k.maxy + pad);
+      let ink = 0, tot = 0;
+      for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) {
+        if (x >= k.minx && x <= k.maxx && y >= k.miny && y <= k.maxy) continue;
+        tot++; if (op[y * w + x]) ink++;
+      }
+      if (tot && ink / tot > 0.25) continue;
       cands.push({ x: k.sx / k.cnt, y: k.sy / k.cnt, area: k.cnt, fill });
     }
     cands.sort((a, b) => b.area * b.fill - a.area * a.fill);
-    const top = cands.slice(0, 7);
+    return cands.slice(0, 10);
+  }
+  // aspect (optional): expected long/short side ratio of the 4 markers; used to reject wrong combinations
+  function pickQuad(top, w, h, aspect) {
     let best = null, bs = 0;
     for (let a = 0; a < top.length; a++) for (let b = a + 1; b < top.length; b++)
       for (let c = b + 1; c < top.length; c++) for (let d = c + 1; d < top.length; d++) {
         const q = [top[a], top[b], top[c], top[d]], areas = q.map(t => t.area);
         const mn = Math.min.apply(null, areas), mx = Math.max.apply(null, areas);
-        if (mn < mx * 0.35) continue;
+        if (mn < mx * 0.3) continue;
         const pts = orderQuad(q.map(t => [t.x, t.y]));
-        if (!isConvex(pts) || polyArea(pts) < 0.06 * w * h) continue;
+        const pa = polyArea(pts);
+        if (!isConvex(pts) || pa < 0.03 * w * h) continue;
         const d01 = dist(pts[0], pts[1]), d12 = dist(pts[1], pts[2]), d23 = dist(pts[2], pts[3]), d30 = dist(pts[3], pts[0]);
-        if (d01 / d23 > 2 || d23 / d01 > 2 || d12 / d30 > 2 || d30 / d12 > 2) continue;
-        const sc = areas.reduce((s, t) => s + t, 0) * (mn / mx);
+        if (d01 / d23 > 2.2 || d23 / d01 > 2.2 || d12 / d30 > 2.2 || d30 / d12 > 2.2) continue;
+        let asOK = 1;
+        if (aspect) {
+          const L = (d01 + d23) / 2, S = (d12 + d30) / 2, as = Math.max(L, S) / Math.min(L, S);
+          if (Math.abs(as - aspect) / aspect > 0.35) continue;
+          asOK = 1 - Math.abs(as - aspect) / aspect;
+        }
+        const sc = pa * (mn / mx) * asOK;
         if (sc > bs) { bs = sc; best = pts; }
       }
     return best;
+  }
+  function findMarkers(gray, w, h, aspect) {
+    const big = Math.max(w, h);
+    // Several thresholds / window sizes: the first one that gives four consistent squares wins
+    const tries = [[big / 16, 0.55], [big / 16, 0.7], [big / 10, 0.45], [big / 24, 0.8], [big / 8, 0.35]];
+    for (const t of tries) {
+      const q = pickQuad(markerCands(gray, w, h, Math.max(15, Math.round(t[0])), t[1]), w, h, aspect);
+      if (q) return q;
+    }
+    return null;
   }
 
   // ---------- Corner detection 2: paper edges (light paper on a darker background) ----------
@@ -182,8 +231,8 @@
   }
 
   // mode: 'markers' | 'page' | 'auto' | 'manual'
-  function alignPhoto(gray, w, h, mode) {
-    if (mode === 'markers' || mode === 'auto') { const m = findMarkers(gray, w, h); if (m) return { pts: m, how: 'markers' }; }
+  function alignPhoto(gray, w, h, mode, aspect) {
+    if (mode === 'markers' || mode === 'auto') { const m = findMarkers(gray, w, h, aspect); if (m) return { pts: m, how: 'markers' }; }
     if (mode === 'page' || mode === 'auto') { const p = findPage(gray, w, h); if (p) return { pts: p, how: 'page' }; }
     return null;
   }
@@ -235,17 +284,33 @@
     const n = collect(g, W, H, cx, cy, rx, ry, n0, n1); if (!n) return 255;
     const v = BUF.subarray(0, n); v.sort(); return v[Math.min(n - 1, Math.floor(p * n))];
   }
-  // Per bubble: darkness = 1 - (inner brightness / surrounding paper brightness); then the sheet-wide median is subtracted (removes printed letters inside bubbles etc.)
-  function sampleTemplate(g, W, H, tpl) {
-    const raw = tpl.groups.map(gr => gr.pts.map(p => {
-      const inner = statMean(g, W, H, p[0], p[1], tpl.rx, tpl.ry, 0, 0.5);
-      const ring = statPct(g, W, H, p[0], p[1], tpl.rx, tpl.ry, 1.35, 1.9, 0.65);
-      return Math.max(0, 1 - inner / Math.max(ring, 1));
-    }));
-    const flat = []; raw.forEach(r => r.forEach(v => flat.push(v)));
-    const base = med(flat);
-    return raw.map(r => r.map(v => Math.max(0, v - base)));
+  // Per bubble: darkness = 1 - (inner brightness / surrounding paper brightness) and fill = share of the inner disc that is inked.
+  // "Inked" is judged against the bubble's own darkest level (half way between paper and its darkest part, at least 18% below paper),
+  // so a light pencil mark that is completely filled still reads as 100% while a half shaded / ticked / dotted bubble reads as partial.
+  // The sheet-wide median is subtracted from both (removes printed letters inside bubbles etc.)
+  function sampleBubbles(g, W, H, tpl) {
+    const dk = [], fl = [];
+    tpl.groups.forEach(gr => {
+      const d = [], f = [];
+      gr.pts.forEach(p => {
+        const ring = Math.max(1, statPct(g, W, H, p[0], p[1], tpl.rx, tpl.ry, 1.35, 1.9, 0.65));
+        const n = collect(g, W, H, p[0], p[1], tpl.rx, tpl.ry, 0, 0.7);
+        let fr = 0;
+        if (n) {
+          const v = BUF.subarray(0, n), sorted = Float32Array.from(v).sort(), low = sorted[Math.floor(n * 0.05)];
+          const cut = ring - Math.max(0.5 * (ring - low), 0.18 * ring);
+          let ink = 0; for (let i = 0; i < n; i++) if (v[i] < cut) ink++;
+          fr = ink / n;
+        }
+        const inner = statMean(g, W, H, p[0], p[1], tpl.rx, tpl.ry, 0, 0.5);
+        d.push(Math.max(0, 1 - inner / ring)); f.push(fr);
+      });
+      dk.push(d); fl.push(f);
+    });
+    const norm = (m, scale) => { const flat = []; m.forEach(r => r.forEach(v => flat.push(v))); const base = med(flat), k = scale ? 1 / Math.max(0.2, 1 - base) : 1; return m.map(r => r.map(v => Math.min(1, Math.max(0, v - base) * k))); };
+    return { dark: norm(dk, false), fill: norm(fl, true) };
   }
+  function sampleTemplate(g, W, H, tpl) { return sampleBubbles(g, W, H, tpl).dark; }
   // Alignment quality: do the printed (dark) bubble outlines land where the template says?
   function fitScore(g, W, H, tpl) {
     const all = []; tpl.groups.forEach(gr => gr.pts.forEach(p => all.push(p)));
@@ -258,7 +323,7 @@
     }
     return n ? s / n : 0;
   }
-  // darkness -> list of marked options per question
+  // darkness -> list of marked options per question (simple version, kept for compatibility)
   function decide(dark, thr) {
     return dark.map(row => {
       const mx = Math.max.apply(null, row);
@@ -267,6 +332,25 @@
       row.forEach((d, o) => { if (d >= lim) res.push(o); });
       return res;
     });
+  }
+  // Strict reading of every question.
+  //  touched bubble = anything inked (fill >= touch) or dark enough (dark >= thr)
+  //  full mark      = touched, the inner disc is at least fillMin covered AND it is dark enough (a faint grey wash is not a full mark)
+  //  A question is INVALID (counted wrong) when it has a partly filled bubble or more than one touched bubble.
+  // returns { sel: [[options]], bad: [bool], partial: [[options]] }
+  function analyze(dark, fill, o) {
+    o = o || {};
+    const thr = o.thr || 0.18, fillMin = o.fillMin || 0.7, touch = o.touch || 0.25, fullDark = o.fullDark || Math.max(0.3, thr * 1.6);
+    const sel = [], bad = [], partial = [];
+    dark.forEach((row, q) => {
+      const s = [], p = [];
+      row.forEach((d, i) => {
+        const f = fill && fill[q] ? fill[q][i] : d;
+        if (f >= touch || d >= thr) { s.push(i); if (f < fillMin || d < fullDark) p.push(i); }
+      });
+      sel.push(s); partial.push(p); bad.push(p.length > 0 || s.length > 1);
+    });
+    return { sel, bad, partial };
   }
 
   // ---------- Scan ----------
@@ -280,7 +364,8 @@
       if (!Hm) return { found: false };
       g = warpGray(gray, w, h, Hm, tpl.W, tpl.H); fit = fitScore(g, tpl.W, tpl.H, tpl);
     } else {
-      const a = alignPhoto(gray, w, h, tpl.align);
+      const ra = dist(tpl.ref[0], tpl.ref[1]) + dist(tpl.ref[3], tpl.ref[2]), rb = dist(tpl.ref[1], tpl.ref[2]) + dist(tpl.ref[0], tpl.ref[3]);
+      const a = alignPhoto(gray, w, h, tpl.align, Math.max(ra, rb) / Math.min(ra, rb));
       if (!a) return { found: false };
       how = a.how;
       const pts = a.pts, phLand = dist(pts[0], pts[1]) > dist(pts[1], pts[2]), tLand = tpl.W > tpl.H;
@@ -299,7 +384,8 @@
       ambiguous = !!(second && Math.abs(best.f - second.f) < 0.03 && cands.length > 1);
     }
     const warped = warpRGBA(rgba, w, h, Hm, tpl.W, tpl.H);
-    return { found: true, how, rot, fit, ambiguous, quad: q, warped, dark: sampleTemplate(g, tpl.W, tpl.H, tpl) };
+    const sm = sampleBubbles(g, tpl.W, tpl.H, tpl);
+    return { found: true, how, rot, fit, ambiguous, quad: q, warped, dark: sm.dark, fill: sm.fill };
   }
 
   // ---------- Building a template from a photo of a blank sheet ----------
@@ -439,7 +525,7 @@
 
   root.OMR = {
     C, MARKERS, bubble, builtinTemplate, toGray, homography, orderQuad, findMarkers, findPage, alignPhoto,
-    warpRGBA, warpGray, sampleTemplate, fitScore, decide, scanTpl, templateBase, detectBubbles, buildGroups, makeTemplate
+    warpRGBA, warpGray, sampleTemplate, sampleBubbles, fitScore, decide, analyze, scanTpl, templateBase, detectBubbles, buildGroups, makeTemplate
   };
   if (typeof module !== 'undefined' && module.exports) module.exports = root.OMR;
 })(typeof self !== 'undefined' ? self : globalThis);
