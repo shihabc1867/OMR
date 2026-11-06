@@ -152,7 +152,12 @@
       const bw = k.maxx - k.minx + 1, bh = k.maxy - k.miny + 1;
       if (bw < minS || bh < minS || bw > maxS || bh > maxS) continue;
       const ar = bw / bh; if (ar < 0.55 || ar > 1.8) continue;
-      const fill = k.cnt / (bw * bh); if (fill < 0.7) continue;
+      const fill = k.cnt / (bw * bh); if (fill < 0.55) continue;
+      // Corner test: a (possibly rotated) square has corners that stick out of the circle of equal area; a filled answer bubble does not
+      { const cx = k.sx / k.cnt, cy = k.sy / k.cnt; let md = 0;
+        for (let y = k.miny; y <= k.maxy; y++) for (let x = k.minx; x <= k.maxx; x++) if (op[y * w + x]) { const d = (x - cx) * (x - cx) + (y - cy) * (y - cy); if (d > md) md = d; }
+        const sz = Math.min(bw, bh), need = sz >= 20 ? 1.15 : sz >= 12 ? 1.08 : 0;   // tiny blurry squares have no reliable corners
+        if (need && Math.sqrt(md) / Math.sqrt(k.cnt / Math.PI) < need) continue; }
       // Isolation: a corner square has plain paper around it (no big dark neighbours)
       const pad = Math.max(3, Math.round(Math.max(bw, bh) * 0.5)), x0 = Math.max(0, k.minx - pad), x1 = Math.min(w - 1, k.maxx + pad), y0 = Math.max(0, k.miny - pad), y1 = Math.min(h - 1, k.maxy + pad);
       let ink = 0, tot = 0;
@@ -160,11 +165,15 @@
         if (x >= k.minx && x <= k.maxx && y >= k.miny && y <= k.maxy) continue;
         tot++; if (op[y * w + x]) ink++;
       }
-      if (tot && ink / tot > 0.25) continue;
-      cands.push({ x: k.sx / k.cnt, y: k.sy / k.cnt, area: k.cnt, fill });
+      const iso = tot ? 1 - ink / tot : 1;   // soft test: page border lines / text next to a square lower the score but do not reject it
+      if (iso < 0.35) continue;
+      cands.push({ x: k.sx / k.cnt, y: k.sy / k.cnt, area: k.cnt, fill, iso });
     }
-    cands.sort((a, b) => b.area * b.fill - a.area * a.fill);
-    return cands.slice(0, 10);
+    cands.sort((a, b) => b.area * b.fill * b.iso * b.iso - a.area * a.fill * a.iso * a.iso);
+    // Keep the candidates that sit at the outer corners of the pattern (the sheet's squares are extreme points) plus the largest few
+    const pick = new Set(cands.slice(0, 6)), by = [c => c.x + c.y, c => c.x - c.y, c => -c.x - c.y, c => c.y - c.x];
+    by.forEach(f => cands.slice().sort((a, b) => f(b) - f(a)).slice(0, 4).forEach(c => pick.add(c)));
+    return Array.from(pick);
   }
   // aspect (optional): expected long/short side ratio of the 4 markers; used to reject wrong combinations
   function pickQuad(top, w, h, aspect) {
@@ -173,7 +182,7 @@
       for (let c = b + 1; c < top.length; c++) for (let d = c + 1; d < top.length; d++) {
         const q = [top[a], top[b], top[c], top[d]], areas = q.map(t => t.area);
         const mn = Math.min.apply(null, areas), mx = Math.max.apply(null, areas);
-        if (mn < mx * 0.3) continue;
+        if (mn < mx * 0.4) continue;
         const pts = orderQuad(q.map(t => [t.x, t.y]));
         const pa = polyArea(pts);
         if (!isConvex(pts) || pa < 0.03 * w * h) continue;
@@ -182,10 +191,13 @@
         let asOK = 1;
         if (aspect) {
           const L = (d01 + d23) / 2, S = (d12 + d30) / 2, as = Math.max(L, S) / Math.min(L, S);
-          if (Math.abs(as - aspect) / aspect > 0.35) continue;
+          if (Math.abs(as - aspect) / aspect > 0.55) continue;
           asOK = 1 - Math.abs(as - aspect) / aspect;
         }
-        const sc = pa * (mn / mx) * asOK;
+        const iso = (q[0].iso + q[1].iso + q[2].iso + q[3].iso) / 4;
+        // A sheet's four squares form a near-rectangle: opposite sides about equal (perspective allows some difference)
+        const par = Math.min(d01, d23) / Math.max(d01, d23) * Math.min(d12, d30) / Math.max(d12, d30);
+        const sc = pa * Math.pow(mn / mx, 3) * Math.pow(par, 4) * asOK * iso * iso;
         if (sc > bs) { bs = sc; best = pts; }
       }
     return best;
@@ -232,8 +244,9 @@
 
   // mode: 'markers' | 'page' | 'auto' | 'manual'
   function alignPhoto(gray, w, h, mode, aspect) {
-    if (mode === 'markers' || mode === 'auto') { const m = findMarkers(gray, w, h, aspect); if (m) return { pts: m, how: 'markers' }; }
-    if (mode === 'page' || mode === 'auto') { const p = findPage(gray, w, h); if (p) return { pts: p, how: 'page' }; }
+    // 'manual' templates also try the corner squares / paper edges (the template then carries its own reference points)
+    if (mode === 'markers' || mode === 'auto' || mode === 'manual') { const m = findMarkers(gray, w, h, aspect); if (m) return { pts: m, how: 'markers' }; }
+    if (mode === 'page' || mode === 'auto' || mode === 'manual') { const p = findPage(gray, w, h); if (p) return { pts: p, how: 'page' }; }
     return null;
   }
 
@@ -289,7 +302,7 @@
   // so a light pencil mark that is completely filled still reads as 100% while a half shaded / ticked / dotted bubble reads as partial.
   // The sheet-wide median is subtracted from both (removes printed letters inside bubbles etc.)
   function sampleBubbles(g, W, H, tpl) {
-    const dk = [], fl = [];
+    const dk = [], fl = [], rw = [];
     tpl.groups.forEach(gr => {
       const d = [], f = [];
       gr.pts.forEach(p => {
@@ -305,10 +318,10 @@
         const inner = statMean(g, W, H, p[0], p[1], tpl.rx, tpl.ry, 0, 0.5);
         d.push(Math.max(0, 1 - inner / ring)); f.push(fr);
       });
-      dk.push(d); fl.push(f);
+      dk.push(d); fl.push(f); rw.push(d.slice());
     });
     const norm = (m, scale) => { const flat = []; m.forEach(r => r.forEach(v => flat.push(v))); const base = med(flat), k = scale ? 1 / Math.max(0.2, 1 - base) : 1; return m.map(r => r.map(v => Math.min(1, Math.max(0, v - base) * k))); };
-    return { dark: norm(dk, false), fill: norm(fl, true) };
+    return { dark: norm(dk, false), fill: norm(fl, true), raw: rw };
   }
   function sampleTemplate(g, W, H, tpl) { return sampleBubbles(g, W, H, tpl).dark; }
   // Alignment quality: do the printed (dark) bubble outlines land where the template says?
@@ -335,18 +348,19 @@
   }
   // Strict reading of every question.
   //  touched bubble = anything inked (fill >= touch) or dark enough (dark >= thr)
-  //  full mark      = touched, the inner disc is at least fillMin covered AND it is dark enough (a faint grey wash is not a full mark)
+  //  full mark      = touched, the inner disc is at least fillMin covered AND it is dark enough (raw darkness >= fullRaw; a faint grey wash is not a full mark)
   //  A question is INVALID (counted wrong) when it has a partly filled bubble or more than one touched bubble.
   // returns { sel: [[options]], bad: [bool], partial: [[options]] }
-  function analyze(dark, fill, o) {
+  function analyze(dark, fill, o, raw) {
     o = o || {};
-    const thr = o.thr || 0.18, fillMin = o.fillMin || 0.7, touch = o.touch || 0.25, fullDark = o.fullDark || Math.max(0.3, thr * 1.6);
+    const thr = o.thr || 0.18, fillMin = o.fillMin || 0.7, touch = o.touch || 0.25, fullRaw = o.fullRaw || 0.45;
     const sel = [], bad = [], partial = [];
     dark.forEach((row, q) => {
       const s = [], p = [];
       row.forEach((d, i) => {
         const f = fill && fill[q] ? fill[q][i] : d;
-        if (f >= touch || d >= thr) { s.push(i); if (f < fillMin || d < fullDark) p.push(i); }
+        if (f >= touch || d >= thr) { s.push(i); const rr = raw && raw[q] ? raw[q][i] : d + 0.15;
+          if (f < fillMin || rr < fullRaw) p.push(i); }
       });
       sel.push(s); partial.push(p); bad.push(p.length > 0 || s.length > 1);
     });
@@ -364,16 +378,21 @@
       if (!Hm) return { found: false };
       g = warpGray(gray, w, h, Hm, tpl.W, tpl.H); fit = fitScore(g, tpl.W, tpl.H, tpl);
     } else {
-      const ra = dist(tpl.ref[0], tpl.ref[1]) + dist(tpl.ref[3], tpl.ref[2]), rb = dist(tpl.ref[1], tpl.ref[2]) + dist(tpl.ref[0], tpl.ref[3]);
-      const a = alignPhoto(gray, w, h, tpl.align, Math.max(ra, rb) / Math.min(ra, rb));
+      // Reference points in template space: the corner squares (tpl.mk, saved when the sheet type was created) or the template corners
+      const mref = tpl.mk || tpl.ref;
+      const ra = dist(mref[0], mref[1]) + dist(mref[3], mref[2]), rb = dist(mref[1], mref[2]) + dist(mref[0], mref[3]);
+      let mode = tpl.align;
+      if (mode === 'manual' && !tpl.mk) mode = 'none';          // old hand-placed template: only manual corners are known
+      let a = alignPhoto(gray, w, h, mode === 'none' ? 'x' : mode, Math.max(ra, rb) / Math.min(ra, rb));
       if (!a) return { found: false };
       how = a.how;
-      const pts = a.pts, phLand = dist(pts[0], pts[1]) > dist(pts[1], pts[2]), tLand = tpl.W > tpl.H;
+      var refUse = (a.how === 'markers') ? mref : tpl.ref;
+      const pts = a.pts, phLand = dist(pts[0], pts[1]) > dist(pts[1], pts[2]), tLand = dist(refUse[0], refUse[1]) > dist(refUse[1], refUse[2]);
       const base = phLand !== tLand ? 1 : 0;
       const cands = typeof opts.rot === 'number' ? [opts.rot] : [base, (base + 2) % 4];
       let best = null, second = null;
       for (const r of cands) {
-        const qq = [0, 1, 2, 3].map(i => pts[(i + r) % 4]), HH = homography(tpl.ref, qq);
+        const qq = [0, 1, 2, 3].map(i => pts[(i + r) % 4]), HH = homography(refUse, qq);
         if (!HH) continue;
         const gg = warpGray(gray, w, h, HH, tpl.W, tpl.H), f = fitScore(gg, tpl.W, tpl.H, tpl);
         const c = { r, q: qq, Hm: HH, g: gg, f };
@@ -385,7 +404,7 @@
     }
     const warped = warpRGBA(rgba, w, h, Hm, tpl.W, tpl.H);
     const sm = sampleBubbles(g, tpl.W, tpl.H, tpl);
-    return { found: true, how, rot, fit, ambiguous, quad: q, warped, dark: sm.dark, fill: sm.fill };
+    return { found: true, how, rot, fit, ambiguous, quad: q, warped, dark: sm.dark, fill: sm.fill, raw: sm.raw };
   }
 
   // ---------- Building a template from a photo of a blank sheet ----------
@@ -520,7 +539,7 @@
   }
 
   function makeTemplate(base, bub, groups, meta) {
-    return { id: meta.id, name: meta.name, W: base.W, H: base.H, ref: base.ref, align: meta.align || 'auto', rx: bub.rx, ry: bub.ry, labels: meta.labels, groups };
+    return { id: meta.id, name: meta.name, W: base.W, H: base.H, ref: base.ref, align: meta.align || 'auto', mk: meta.mk || null, rx: bub.rx, ry: bub.ry, labels: meta.labels, groups };
   }
 
   root.OMR = {
