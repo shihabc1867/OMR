@@ -51,23 +51,29 @@
   function drawBuiltinSheet(ctx) {
     ctx.save();
     ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, C.W, C.H);
+    // four black corner squares (used to straighten the photo)
     ctx.fillStyle = '#000';
     OMR.MARKERS.forEach(p => ctx.fillRect(p[0] - C.MK / 2, p[1] - C.MK / 2, C.MK, C.MK));
-    ctx.fillStyle = '#111'; ctx.textAlign = 'center';
-    ctx.font = 'bold 34px ' + FONT; ctx.fillText('OMR Answer Sheet', C.W / 2, 105);
-    ctx.font = '20px ' + FONT; ctx.textAlign = 'left';
-    ctx.fillText('Name: ______________________________', 110, 160);
-    ctx.fillText('Roll: ______________', 640, 160);
-    ctx.textAlign = 'center'; ctx.font = 'bold 17px ' + FONT;
-    for (let c = 0; c < C.COLS; c++) for (let o = 0; o < C.OPT; o++) ctx.fillText(String.fromCharCode(65 + o), OMR.bubble(c * C.ROWS, o)[0], C.GY0 - 34);
-    ctx.lineWidth = 2; ctx.strokeStyle = '#222';
-    for (let q = 0; q < C.ROWS * C.COLS; q++) for (let o = 0; o < C.OPT; o++) {
-      const p = OMR.bubble(q, o); ctx.beginPath(); ctx.arc(p[0], p[1], C.BR, 0, 7); ctx.stroke();
+    // dashed lines between the four column blocks
+    ctx.strokeStyle = '#000'; ctx.lineWidth = 5; ctx.setLineDash([22, 14]);
+    for (let c = 1; c < C.COLS; c++) {
+      const x = C.GX0 + c * C.COLW - 144;
+      ctx.beginPath(); ctx.moveTo(x, 12); ctx.lineTo(x, C.H - 12); ctx.stroke();
     }
-    ctx.textAlign = 'right'; ctx.font = 'bold 16px ' + FONT; ctx.fillStyle = '#111';
-    for (let q = 0; q < C.ROWS * C.COLS; q++) { const p = OMR.bubble(q, 0); ctx.fillText(String(q + 1), p[0] - C.BR - 11, p[1] + 6); }
-    ctx.textAlign = 'center'; ctx.font = '16px ' + FONT; ctx.fillStyle = '#444';
-    ctx.fillText('Fill bubbles completely • Do not cover the four black corner squares • Do not fold', C.W / 2, 1385);
+    ctx.setLineDash([]);
+    // bubbles with the option letter inside, question number on the left
+    ctx.lineWidth = 2.5; ctx.strokeStyle = '#222'; ctx.textBaseline = 'middle';
+    for (let q = 0; q < C.ROWS * C.COLS; q++) {
+      for (let o = 0; o < C.OPT; o++) {
+        const p = OMR.bubble(q, o);
+        ctx.beginPath(); ctx.arc(p[0], p[1], C.BR, 0, 7); ctx.stroke();
+        ctx.fillStyle = '#666'; ctx.textAlign = 'center'; ctx.font = '19px ' + FONT;
+        ctx.fillText(String.fromCharCode(97 + o), p[0], p[1] + 1);
+      }
+      const p0 = OMR.bubble(q, 0);
+      ctx.fillStyle = '#111'; ctx.textAlign = 'right'; ctx.font = 'bold 22px ' + FONT;
+      ctx.fillText(String(q + 1), p0[0] - C.BR - 22, p0[1] + 1);
+    }
     ctx.restore();
   }
   function drawGenericSheet(ctx, tpl) {
@@ -250,7 +256,8 @@
     document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(a.href), 4000);
   }
   $('#sheetDl').onclick = () => {
-    const cv = document.createElement('canvas'); cv.width = C.W; cv.height = C.H; drawBuiltinSheet(cv.getContext('2d'));
+    const cv = document.createElement('canvas'); cv.width = C.W * 2; cv.height = C.H * 2;
+    const cx = cv.getContext('2d'); cx.scale(2, 2); drawBuiltinSheet(cx);
     cv.toBlob(b => download(b, 'omr-sheet.png'), 'image/png');
   };
 
