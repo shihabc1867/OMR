@@ -12,7 +12,7 @@
   };
 
   // ---------- state ----------
-  const DEF = { pin: '1234', per: 1, neg: 0.25, timerPct: 3, thr: 0.18, url: '' };
+  const DEF = { pin: '1234', per: 1, neg: 0.25, timerPct: 3, thr: 0.18, fillPct: 70, url: '' };
   let S = Object.assign({}, DEF, LS.get('omr_settings', {}));
   let customTpls = LS.get('omr_templates', []);   // [{id,name,W,H,ref,align,rx,ry,labels,groups}]
   let keys = LS.get('omr_keys', {});              // id -> {id,name,tplId,answers:{ "1":optIndex }}
@@ -274,7 +274,7 @@
     if (!key) { smsg('Choose an answer key first (create one in the Answer Key tab).'); return; }
     if (!getTpl(key.tplId)) { smsg('This answer key uses a sheet type that is not on this device. Open the Settings tab and refresh from the server, or re-create the sheet type.'); return; }
     smsg('Scanning…', true);
-    try { const p = await loadPhoto(file, 1800); sc = { photo: p, rot: undefined, pts: null, manual: new Set(), rid: null }; setTimeout(runScan, 30); }
+    try { const p = await loadPhoto(file, 2200); sc = { photo: p, rot: undefined, pts: null, manual: new Set(), rid: null }; setTimeout(runScan, 30); }
     catch (e) { smsg('Error: ' + e.message); }
   }
   function runScan() {
@@ -286,14 +286,16 @@
       openCorners(p, quad, cornerHint(tpl), pts => { sc.pts = pts; sc.lastQuad = pts; runScan(); });
       return;
     }
-    sc.rot = r.rot; sc.res = r; sc.lastQuad = r.quad; sc.sel = OMR.decide(r.dark, S.thr); sc.manual = new Set();
+    sc.rot = r.rot; sc.res = r; sc.lastQuad = r.quad; const A = OMR.analyze(r.dark, r.fill, { thr: S.thr, fillMin: (S.fillPct || 70) / 100 });
+    sc.sel = A.sel; sc.bad = new Set(); A.bad.forEach((b, q) => { if (b) sc.bad.add(q); }); sc.manual = new Set();
     sc.img = new ImageData(r.warped, tpl.W, tpl.H);
     submitted = false; $('#resBox').hidden = true; scanCv.width = tpl.W; scanCv.height = tpl.H;
     $('#scanArea').hidden = false; updateTimerBtn(); renderScan();
-    const n = sc.sel.filter(s => s.length).length;
+    const n = sc.sel.filter(s => s.length).length, nb = sc.bad.size;
     if (r.fit < 0.1) smsg('⚠ The sheet does not seem to line up with the template (alignment ' + r.fit.toFixed(2) + '). Try “Adjust corners” or “Rotate”, or retake the photo.');
     else if (r.ambiguous) smsg('✔ Scanned (' + n + ' questions marked). Orientation was hard to tell — if the circles look wrong, tap “Rotate”.', true);
     else if (n < 3) smsg('⚠ Very few marks detected. Check the sheet type and orientation (“Rotate”), lighting, or lower the detection threshold in Settings.');
+    else if (nb) smsg('✔ Scan complete — ' + n + ' questions have marks. ⚠ ' + nb + ' question(s) have multiple or partly filled marks (orange) and will count as wrong. Tap a bubble to correct it, then Submit.', true);
     else smsg('✔ Scan complete — ' + n + ' questions have marks. Fix any bubble by tapping it, then Submit.', true);
     $('#scanWrap').scrollIntoView({ behavior: 'smooth', block: 'start' });
   }
@@ -309,18 +311,19 @@
       const s = sc.sel[q] || [], a = key ? key.answers[q + 1] : undefined, g = tpl.groups[q];
       s.forEach(o => {
         let f = 'rgba(96,165,250,.40)', st = '#2563eb';
-        if (s.length > 1) { f = 'rgba(251,191,36,.45)'; st = '#d97706'; }
+        if (sc.bad.has(q)) { f = 'rgba(251,191,36,.45)'; st = '#d97706'; }
         if (key && a !== undefined) {
-          if (s.length === 1 && o === a) { f = 'rgba(74,222,128,.45)'; st = '#16a34a'; } else { f = 'rgba(248,113,113,.45)'; st = '#dc2626'; }
+          if (!sc.bad.has(q) && s.length === 1 && o === a) { f = 'rgba(74,222,128,.45)'; st = '#16a34a'; } else { f = 'rgba(248,113,113,.45)'; st = '#dc2626'; }
         }
         ell(x, tpl, g.pts[o], f, st, sc.manual.has(q + '-' + o));
       });
-      if (key && a !== undefined && g.pts[a] && !(s.length === 1 && s[0] === a)) ell(x, tpl, g.pts[a], null, '#16a34a', true);
+      if (key && a !== undefined && g.pts[a] && !(!sc.bad.has(q) && s.length === 1 && s[0] === a)) ell(x, tpl, g.pts[a], null, '#16a34a', true);
     }
   }
   scanCv.onclick = ev => {
     if (!sc.sel) return; const tpl = scanTplObj(), h = hit(scanCv, ev, tpl); if (!h) return;
     const s = sc.sel[h[0]], i = s.indexOf(h[1]), k = h[0] + '-' + h[1];
+    sc.bad.delete(h[0]); // the person has checked this question by hand
     if (i >= 0) { s.splice(i, 1); sc.manual.delete(k); } else { s.push(h[1]); sc.manual.add(k); }
     renderScan(); refreshResult();
   };
@@ -332,11 +335,12 @@
   $('#timerBtn').onclick = () => { timerOn = !timerOn; updateTimerBtn(); refreshResult(); };
   $('#scanKey').onchange = () => { if ($('#scanArea').hidden === false) { $('#scanArea').hidden = true; sc = { sel: null }; submitted = false; } };
 
-  function compute(sel, key, tOn) {
+  function compute(sel, key, tOn, bad) {
     let c = 0, w = 0, b = 0; const wrongQs = [], qs = Object.keys(key.answers).map(Number).sort((a, z) => a - z);
     qs.forEach(q => {
       const s = sel[q - 1] || [];
-      if (!s.length) b++; else if (s.length === 1 && s[0] === key.answers[q]) c++; else { w++; wrongQs.push(q); }
+      if (bad && bad.has(q - 1)) { w++; wrongQs.push(q); }
+      else if (!s.length) b++; else if (s.length === 1 && s[0] === key.answers[q]) c++; else { w++; wrongQs.push(q); }
     });
     const total = qs.length * S.per, neg = w * S.neg, tim = tOn ? total * S.timerPct / 100 : 0;
     return { c, w, b, n: qs.length, total, neg, tim, fin: Math.max(0, c * S.per - neg - tim), wrongQs };
@@ -346,17 +350,17 @@
     $('#rM').textContent = fmt(r.total); $('#rN').textContent = '− ' + fmt(r.neg);
     $('#rT').textContent = timerOn ? '− ' + fmt(r.tim) : '0';
     $('#rF').textContent = fmt(r.fin) + ' / ' + fmt(r.total);
-    $('#rS').textContent = '+' + fmt(S.per) + ' per correct, −' + fmt(S.neg) + ' per wrong (multiple marks count as wrong)';
+    $('#rS').textContent = '+' + fmt(S.per) + ' per correct, −' + fmt(S.neg) + ' per wrong (multiple or partly filled marks count as wrong)';
     $('#resBox').hidden = false;
   }
   let syncT = null;
   function refreshResult() {
     if (!submitted) return; const key = keys[$('#scanKey').value]; if (!key) return;
-    renderScan(); showResult(compute(sc.sel, key, timerOn)); storeRecord();
+    renderScan(); showResult(compute(sc.sel, key, timerOn, sc.bad)); storeRecord();
   }
   function storeRecord() {
-    const key = keys[$('#scanKey').value], r = compute(sc.sel, key, timerOn);
-    const rec = Object.assign({ id: sc.rid, t: Date.now(), keyId: key.id, keyName: key.name, student: $('#stuName').value.trim() || 'Unknown', sel: sc.sel.map(s => s.slice()), timer: timerOn }, r);
+    const key = keys[$('#scanKey').value], r = compute(sc.sel, key, timerOn, sc.bad);
+    const rec = Object.assign({ id: sc.rid, t: Date.now(), keyId: key.id, keyName: key.name, student: $('#stuName').value.trim() || 'Unknown', sel: sc.sel.map(s => s.slice()), bad: Array.from(sc.bad || []), timer: timerOn }, r);
     const i = results.findIndex(x => x.id === rec.id);
     if (i >= 0) { rec.t = results[i].t; results[i] = rec; } else results.unshift(rec);
     saveResults(); clearTimeout(syncT); syncT = setTimeout(() => api('saveResult', { result: rec }), 800);
@@ -496,14 +500,14 @@
   };
 
   // ---------- settings ----------
-  function fillSettings() { $('#sPer').value = S.per; $('#sNeg').value = S.neg; $('#sTim').value = S.timerPct; $('#sThr').value = S.thr; $('#sUrl').value = S.url; }
+  function fillSettings() { $('#sPer').value = S.per; $('#sNeg').value = S.neg; $('#sTim').value = S.timerPct; $('#sThr').value = S.thr; $('#sFill').value = S.fillPct; $('#sUrl').value = S.url; }
   $('#sSave').onclick = async () => {
     const m = $('#sMsg'); m.className = 'msg';
     if ($('#sPin').value !== S.pin) { m.textContent = 'Wrong admin PIN.'; return; }
-    const per = parseFloat($('#sPer').value), neg = parseFloat($('#sNeg').value), tp = parseFloat($('#sTim').value), thr = parseFloat($('#sThr').value);
-    if ([per, neg, tp, thr].some(isNaN) || per < 0 || neg < 0 || tp < 0 || tp > 100 || thr < 0.03 || thr > 0.6) { m.textContent = 'Please enter valid values.'; return; }
+    const per = parseFloat($('#sPer').value), neg = parseFloat($('#sNeg').value), tp = parseFloat($('#sTim').value), thr = parseFloat($('#sThr').value), fp = parseFloat($('#sFill').value);
+    if ([per, neg, tp, thr, fp].some(isNaN) || fp < 30 || fp > 95 || per < 0 || neg < 0 || tp < 0 || tp > 100 || thr < 0.03 || thr > 0.6) { m.textContent = 'Please enter valid values.'; return; }
     const np = $('#sNewPin').value.trim(), oldPin = S.pin;
-    S = Object.assign(S, { per, neg, timerPct: tp, thr, url: $('#sUrl').value.trim() });
+    S = Object.assign(S, { per, neg, timerPct: tp, thr, fillPct: fp, url: $('#sUrl').value.trim() });
     if (np) S.pin = np;
     saveSettings(); pinOK = true; updateTimerBtn(); refreshResult();
     $('#sNewPin').value = ''; $('#sPin').value = '';
