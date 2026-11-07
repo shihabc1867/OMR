@@ -45,6 +45,27 @@ canvas{display:block;width:100%;height:auto}
 #cornerOv .box{max-width:760px;margin:auto}
 #cornerOv p{color:#e2e8f0;font-size:13px;margin:4px 0 8px}
 #cornerCv{touch-action:none;border-radius:8px;background:#000}
+
+.rk{display:inline-block;min-width:26px;text-align:center;background:#0f766e;color:#fff;border-radius:6px;padding:1px 6px;font-size:13px;margin-right:6px}
+.item.fail b,.item.fail small,.item.fail .rk{color:#dc2626}.item.fail .rk{background:#fee2e2}
+.grp{font-weight:700;margin:14px 0 2px;color:#0f766e}
+#printOv{display:none;position:fixed;inset:0;background:#fff;z-index:60;overflow:auto;color:#000}
+#printOv.on{display:block}
+#printOv .pbar{position:sticky;top:0;background:#f1f5f9;padding:8px;border-bottom:1px solid #cbd5e1}
+#printBody{padding:14px;max-width:900px;margin:auto}
+#printBody h2{margin:0 0 4px;font-size:20px}#printBody .sub{color:#475569;font-size:13px;margin-bottom:10px}
+#printBody table{width:100%;border-collapse:collapse;font-size:13px}
+#printBody th,#printBody td{border:1px solid #94a3b8;padding:5px 6px;text-align:left}
+#printBody th{background:#e2e8f0}#printBody td.n,#printBody th.n{text-align:right}
+#printBody tr.fail td,#printBody .fail{color:#dc2626;font-weight:600}
+#printBody thead{display:table-header-group}#printBody tr{page-break-inside:avoid}
+#printBody .page{page-break-after:always;margin-bottom:24px}#printBody .page:last-child{page-break-after:auto}
+#printBody .kv{display:grid;grid-template-columns:190px 1fr;gap:3px 10px;font-size:15px;margin:10px 0}
+#printBody .score{font-size:26px;font-weight:800}
+#printBody .ans{columns:4;column-gap:12px;font-size:12px}#printBody .ans div{break-inside:avoid;padding:1px 0}
+#printBody .wrong{color:#dc2626}
+@page{margin:12mm}
+@media print{body{background:#fff}body>*:not(#printOv){display:none!important}#printOv{display:block!important;position:static;overflow:visible}#printOv .pbar{display:none}#printBody{padding:0;max-width:none}}
 </style>
 </head>
 <body>
@@ -83,8 +104,10 @@ canvas{display:block;width:100%;height:auto}
   <div class="card">
     <label>Answer key to grade against</label>
     <select id="scanKey"></select>
-    <label>Student name / roll</label>
-    <input id="stuName" placeholder="Name or roll number">
+    <div class="two">
+      <div><label>Student name</label><input id="stuName" placeholder="Name"></div>
+      <div><label>Roll / ID</label><input id="stuId" placeholder="Roll or ID"></div>
+    </div>
     <button class="b" id="camBtn">📷 Take photo of answer sheet</button>
     <button class="b alt" id="galBtn">🖼 Choose from gallery</button>
     <input type="file" id="camIn" accept="image/*" capture="environment" hidden>
@@ -121,6 +144,8 @@ canvas{display:block;width:100%;height:auto}
       <div class="row"><span>Second Timer penalty</span><b id="rT"></b></div>
       <div style="text-align:center;margin:12px 0 4px">Score<div class="big" id="rF"></div></div>
       <div class="hint" id="rS" style="text-align:center"></div>
+      <button class="b" id="nextBtn">➕ Next student</button>
+      <button class="b alt" id="stuPdf">📄 This student's PDF</button>
     </div>
   </div>
 </section>
@@ -128,11 +153,17 @@ canvas{display:block;width:100%;height:auto}
 <!-- RESULTS -->
 <section id="v-res">
   <div class="card">
-    <button class="b alt" id="resSync">🔄 Refresh from server</button>
+    <label>Answer key</label>
+    <select id="resKey"></select>
+    <button class="b" id="pdfAll">📄 Merit list PDF (all students)</button>
+    <button class="b alt" id="pdfEach">📄 All students — one page each</button>
     <button class="b alt" id="resCsv">⬇ Download CSV</button>
+    <button class="b alt" id="resSync">🔄 Refresh from server</button>
+    <p class="hint">Ranked by marks, highest first. Students below the pass mark (Settings, default 40%) are shown in red. PDF opens a print screen: choose “Save as PDF”.</p>
     <div id="resList"></div>
   </div>
 </section>
+<div id="printOv"><div class="pbar"><button class="b" id="prPrint">🖨 Print / Save as PDF</button><button class="b alt" id="prClose">✕ Close</button></div><div id="printBody"></div></div>
 
 <!-- SHEETS / TEMPLATES -->
 <section id="v-tpl">
@@ -193,6 +224,7 @@ canvas{display:block;width:100%;height:auto}
     <label>Second Timer penalty (% of total marks)</label><input id="sTim" type="number" step="0.1">
     <label>Mark detection threshold (0.05–0.5; lower detects fainter marks)</label><input id="sThr" type="number" step="0.01">
     <label>Minimum fill % for a valid answer (30–95; a bubble filled less than this counts as partial = wrong)</label><input id="sFill" type="number" step="1">
+    <label>Pass mark % (students below this are shown in red)</label><input id="sPass" type="number" step="1">
     <label>Apps Script Web App URL (optional — cloud sync)</label><input id="sUrl" placeholder="https://script.google.com/macros/s/.../exec">
     <label>New PIN (leave empty to keep)</label><input id="sNewPin" type="password" inputmode="numeric">
     <button class="b" id="sSave">💾 Save</button>
