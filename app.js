@@ -12,7 +12,7 @@
   };
 
   // ---------- state ----------
-  const DEF = { pin: '1234', per: 1, neg: 0.25, timerPct: 3, thr: 0.18, fillPct: 70, url: '' };
+  const DEF = { pin: '1234', per: 1, neg: 0.25, timerPct: 3, thr: 0.18, fillPct: 70, passPct: 40, url: '' };
   let S = Object.assign({}, DEF, LS.get('omr_settings', {}));
   let customTpls = LS.get('omr_templates', []);   // [{id,name,W,H,ref,align,rx,ry,labels,groups}]
   let keys = LS.get('omr_keys', {});              // id -> {id,name,tplId,answers:{ "1":optIndex }}
@@ -303,7 +303,8 @@
       openCorners(p, quad, cornerHint(tpl), pts => { sc.pts = pts; sc.lastQuad = pts; runScan(); });
       return;
     }
-    learnMarkers(tpl, p, r);
+    if (r.learned && !tpl.builtin) { tpl.mk = r.learned; tpl.align = 'markers'; if (saveTpls()) setTimeout(() => smsg('✔ Corner squares learned for this sheet type — scanning now lines up automatically.', true), 50); }
+    else learnMarkers(tpl, p, r);
     sc.rot = r.rot; sc.res = r; sc.lastQuad = r.quad; const A = OMR.analyze(r.dark, r.fill, { thr: S.thr, fillMin: (S.fillPct || 70) / 100 }, r.raw);
     sc.sel = A.sel; sc.bad = new Set(); A.bad.forEach((b, q) => { if (b) sc.bad.add(q); }); sc.manual = new Set();
     sc.img = new ImageData(r.warped, tpl.W, tpl.H);
@@ -376,9 +377,12 @@
     if (!submitted) return; const key = keys[$('#scanKey').value]; if (!key) return;
     renderScan(); showResult(compute(sc.sel, key, timerOn, sc.bad)); storeRecord();
   }
+  const stuNow = () => sc.stu || { name: $('#stuName').value.trim(), id: $('#stuId').value.trim() };
+  const onStu = () => { if (submitted && sc.sel) { sc.stu = { name: $('#stuName').value.trim(), id: $('#stuId').value.trim() }; storeRecord(); } };
+  $('#stuName').oninput = onStu; $('#stuId').oninput = onStu;
   function storeRecord() {
     const key = keys[$('#scanKey').value], r = compute(sc.sel, key, timerOn, sc.bad);
-    const rec = Object.assign({ id: sc.rid, t: Date.now(), keyId: key.id, keyName: key.name, student: $('#stuName').value.trim() || 'Unknown', sel: sc.sel.map(s => s.slice()), bad: Array.from(sc.bad || []), timer: timerOn }, r);
+    const rec = Object.assign({ id: sc.rid, t: Date.now(), keyId: key.id, keyName: key.name, student: stuNow().name || 'Unknown', sid: stuNow().id, sel: sc.sel.map(s => s.slice()), bad: Array.from(sc.bad || []), timer: timerOn }, r);
     const i = results.findIndex(x => x.id === rec.id);
     if (i >= 0) { rec.t = results[i].t; results[i] = rec; } else results.unshift(rec);
     saveResults(); clearTimeout(syncT); syncT = setTimeout(() => api('saveResult', { result: rec }), 800);
@@ -386,26 +390,105 @@
   $('#submitBtn').onclick = () => {
     if (!sc.sel) return; if (!keys[$('#scanKey').value]) { smsg('Choose an answer key.'); return; }
     if (!sc.rid) sc.rid = 'r' + Date.now();
+    sc.stu = { name: $('#stuName').value.trim(), id: $('#stuId').value.trim() };
+    const dup = sc.stu.id && results.some(x => x.keyId === keys[$('#scanKey').value].id && x.sid === sc.stu.id && x.id !== sc.rid);
     submitted = true; refreshResult(); $('#resBox').scrollIntoView({ behavior: 'smooth', block: 'center' });
+    if (dup) smsg('⚠ Roll/ID ' + sc.stu.id + ' already has a result for this answer key (duplicate). Delete the older one in Results if it is a mistake.');
   };
+  $('#nextBtn').onclick = () => {
+    $('#scanArea').hidden = true; $('#resBox').hidden = true; sc = { sel: null }; submitted = false;
+    $('#stuName').value = ''; $('#stuId').value = ''; smsg('Ready for the next sheet.', true); window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
+  $('#stuPdf').onclick = () => { const r = results.find(x => x.id === sc.rid); if (r) printStudents([r], 'Result-' + (r.sid || r.student)); };
 
   // ---------- results tab ----------
+  const passPct = () => (S.passPct == null ? 40 : S.passPct);
+  const pctOf = r => (r.total ? r.fin / r.total * 100 : 0);
+  const isFail = r => pctOf(r) < passPct();
+  const p1 = x => String(Math.round(x * 10) / 10);
+  const nameOf = r => r.student || 'Unknown';
+  // Highest marks first; equal marks share the same rank
+  function ranked(keyId) {
+    const L = results.filter(r => r.keyId === keyId).sort((x, y) => y.fin - x.fin || y.c - x.c || x.w - y.w || nameOf(x).localeCompare(nameOf(y)) || x.t - y.t);
+    let rank = 0, prev = null;
+    return L.map((r, i) => { if (prev === null || r.fin !== prev) rank = i + 1; prev = r.fin; return { r, rank, n: L.length }; });
+  }
+  function resKeyIds() {
+    const seen = {}, out = [];
+    results.slice().sort((x, y) => y.t - x.t).forEach(r => { if (!seen[r.keyId]) { seen[r.keyId] = 1; out.push({ id: r.keyId, name: r.keyName }); } });
+    return out;
+  }
+  function selKeyIds() { const v = $('#resKey').value; return v ? [v] : resKeyIds().map(k => k.id); }
+  function fillResKey() {
+    const sel = $('#resKey'), cur = sel.value, ks = resKeyIds();
+    sel.innerHTML = '<option value="">All answer keys</option>' + ks.map(k => `<option value="${esc(k.id)}">${esc(k.name)}</option>`).join('');
+    sel.value = ks.some(k => k.id === cur) ? cur : '';
+  }
+  $('#resKey').onchange = () => renderResults();
   function renderResults() {
+    fillResKey();
     const L = $('#resList');
     if (!results.length) { L.innerHTML = '<p class="hint">No results yet.</p>'; return; }
-    L.innerHTML = results.slice().sort((a, b) => b.t - a.t).map(r =>
-      `<div class="item"><div><b>${esc(r.student)}</b><small>${esc(r.keyName)} • ${esc(new Date(r.t).toLocaleString())}<br>Correct ${r.c} • Wrong ${r.w} • Blank ${r.b}${r.timer ? ' • Timer penalty' : ''}${r.wrongQs && r.wrongQs.length ? '<br>Wrong Q: ' + esc(r.wrongQs.join(', ')) : ''}</small></div>
-      <div style="text-align:right"><b class="ok">${fmt(r.fin)}/${fmt(r.total)}</b><br><button class="b red sm" data-del="${esc(r.id)}">Delete</button></div></div>`).join('');
+    L.innerHTML = selKeyIds().map(kid => {
+      const R = ranked(kid); if (!R.length) return '';
+      const fails = R.filter(x => isFail(x.r)).length;
+      return `<div class="grp">${esc(R[0].r.keyName)} — ${R.length} student(s)${fails ? ', ' + fails + ' below ' + fmt(passPct()) + '%' : ''}</div>` + R.map(({ r, rank }) =>
+        `<div class="item${isFail(r) ? ' fail' : ''}"><div><span class="rk">${rank}</span><b>${esc(nameOf(r))}</b>${r.sid ? ' • ID ' + esc(r.sid) : ''}<small>Correct ${r.c} • Wrong ${r.w} • Blank ${r.b}${r.timer ? ' • Timer penalty' : ''} • ${p1(pctOf(r))}%<br>${esc(new Date(r.t).toLocaleString())}${r.wrongQs && r.wrongQs.length ? '<br>Wrong Q: ' + esc(r.wrongQs.join(', ')) : ''}</small></div>
+        <div style="text-align:right"><b class="ok">${fmt(r.fin)}/${fmt(r.total)}</b><br><button class="b alt sm" data-pdf="${esc(r.id)}">PDF</button> <button class="b red sm" data-del="${esc(r.id)}">Delete</button></div></div>`).join('');
+    }).join('');
     L.querySelectorAll('[data-del]').forEach(b => b.onclick = () => {
       if (!confirm('Delete this result?') || !requirePin()) return;
       results = results.filter(r => r.id !== b.dataset.del); saveResults(); renderResults(); api('deleteResult', { id: b.dataset.del });
     });
+    L.querySelectorAll('[data-pdf]').forEach(b => b.onclick = () => { const r = results.find(x => x.id === b.dataset.pdf); if (r) printStudents([r], 'Result-' + (r.sid || r.student)); });
   }
+
+  // ---------- PDF (print screen -> Save as PDF) ----------
+  const red = r => (isFail(r) ? ' class="fail"' : '');
+  const today = () => new Date().toLocaleDateString();
+  function meritHtml(kid) {
+    const R = ranked(kid); if (!R.length) return '';
+    const tot = R[0].r.total, fails = R.filter(x => isFail(x.r)).length, avg = R.reduce((s, x) => s + x.r.fin, 0) / R.length;
+    return `<div class="page"><h2>Merit list — ${esc(R[0].r.keyName)}</h2>
+      <div class="sub">${esc(today())} • ${R.length} student(s) • Total marks ${fmt(tot)} • Highest ${fmt(R[0].r.fin)} • Average ${p1(avg)} • Pass mark ${fmt(passPct())}% • Below pass mark: ${fails}</div>
+      <table><thead><tr><th class="n">Rank</th><th>Name</th><th>Roll / ID</th><th class="n">Correct</th><th class="n">Wrong</th><th class="n">Blank</th><th class="n">Marks</th><th class="n">%</th></tr></thead><tbody>` +
+      R.map(({ r, rank }) => `<tr${red(r)}><td class="n">${rank}</td><td>${esc(nameOf(r))}</td><td>${esc(r.sid || '')}</td><td class="n">${r.c}</td><td class="n">${r.w}</td><td class="n">${r.b}</td><td class="n">${fmt(r.fin)} / ${fmt(r.total)}</td><td class="n">${p1(pctOf(r))}</td></tr>`).join('') +
+      '</tbody></table></div>';
+  }
+  function studentHtml(r) {
+    const R = ranked(r.keyId), me = R.find(x => x.r.id === r.id), key = keys[r.keyId], f = isFail(r);
+    const tpl = key ? allTpls().find(t => t.id === key.tplId) : null, lab = (tpl && tpl.labels) || ['A', 'B', 'C', 'D', 'E', 'F'];
+    let ans = '';
+    if (key) {
+      const bad = new Set(r.bad || []), wr = new Set(r.wrongQs || []);
+      ans = '<h3 style="margin:14px 0 4px;font-size:15px">Answers</h3><div class="ans">' + Object.keys(key.answers).map(Number).sort((x, y) => x - y).map(q => {
+        const s = (r.sel && r.sel[q - 1]) || [], mine = s.length ? s.map(i => lab[i] || i + 1).join('+') : '–', good = lab[key.answers[q]] || key.answers[q];
+        return `<div class="${wr.has(q) ? 'wrong' : ''}">${q}. ${esc(mine)}${bad.has(q - 1) ? '*' : ''} ${wr.has(q) ? '✗ (' + esc(good) + ')' : s.length ? '✓' : ''}</div>`;
+      }).join('') + '</div><div class="sub">✗ = wrong, correct answer in brackets • * = multiple or partly filled marks (counted wrong)</div>';
+    }
+    return `<div class="page"><h2>OMR Result</h2><div class="sub">${esc(r.keyName)} • ${esc(new Date(r.t).toLocaleDateString())}</div>
+      <div class="kv"><b>Name</b><span${f ? ' class="fail"' : ''}>${esc(nameOf(r))}</span><b>Roll / ID</b><span${f ? ' class="fail"' : ''}>${esc(r.sid || '—')}</span>
+      <b>Rank</b><span>${me ? me.rank + ' of ' + me.n : '—'}</span>
+      <b>Marks</b><span class="score${f ? ' fail' : ''}">${fmt(r.fin)} / ${fmt(r.total)} (${p1(pctOf(r))}%)</span>
+      <b>Result</b><span${f ? ' class="fail"' : ''}>${f ? 'Below pass mark (' + fmt(passPct()) + '%)' : 'Passed'}</span>
+      <b>Correct</b><span>${r.c}</span><b>Wrong</b><span>${r.w}</span><b>Unanswered</b><span>${r.b}</span>
+      <b>Wrong-answer penalty</b><span>− ${fmt(r.neg)}</span>${r.timer ? '<b>Second Timer penalty</b><span>− ' + fmt(r.tim) + '</span>' : ''}</div>${ans}</div>`;
+  }
+  function openPrint(html, title) {
+    if (!html) { alert('No results to print.'); return; }
+    $('#printBody').innerHTML = html; $('#printOv').classList.add('on'); $('#printOv').scrollTop = 0; $('#printOv').dataset.title = title || 'OMR-Result';
+  }
+  function printStudents(list, title) { openPrint(list.map(studentHtml).join(''), title); }
+  document.body.appendChild($('#printOv'));   // must be a direct child of <body> for the print rules
+  $('#prClose').onclick = () => $('#printOv').classList.remove('on');
+  $('#prPrint').onclick = () => { const t = document.title; document.title = $('#printOv').dataset.title || 'OMR-Result'; window.print(); setTimeout(() => { document.title = t; }, 1500); };
+  $('#pdfAll').onclick = () => openPrint(selKeyIds().map(meritHtml).join(''), 'Merit-list');
+  $('#pdfEach').onclick = () => openPrint(selKeyIds().map(kid => ranked(kid).map(x => studentHtml(x.r)).join('')).join(''), 'All-results');
   $('#resCsv').onclick = () => {
     const q = v => '"' + String(v).replace(/"/g, '""') + '"';
-    const rows = [['Time', 'Student', 'Answer key', 'Correct', 'Wrong', 'Unanswered', 'Total marks', 'Wrong penalty', 'Timer penalty', 'Score', 'Wrong questions']];
-    results.slice().sort((a, b) => a.t - b.t).forEach(r => rows.push([new Date(r.t).toLocaleString(), r.student, r.keyName, r.c, r.w, r.b, r.total, r.neg, r.tim, r.fin, (r.wrongQs || []).join(' ')]));
-    download(new Blob(['﻿' + rows.map(r => r.map(q).join(',')).join('\n')], { type: 'text/csv;charset=utf-8' }), 'omr-results.csv');
+    const rows = [['Rank', 'Name', 'Roll/ID', 'Answer key', 'Time', 'Correct', 'Wrong', 'Unanswered', 'Total marks', 'Wrong penalty', 'Timer penalty', 'Score', 'Percent', 'Status', 'Wrong questions']];
+    selKeyIds().forEach(kid => ranked(kid).forEach(({ r, rank }) => rows.push([rank, nameOf(r), r.sid || '', r.keyName, new Date(r.t).toLocaleString(), r.c, r.w, r.b, r.total, r.neg, r.tim, r.fin, p1(pctOf(r)), isFail(r) ? 'Below pass mark' : 'Pass', (r.wrongQs || []).join(' ')])));
+    download(new Blob(['\ufeff' + rows.map(r => r.map(q).join(',')).join('\n')], { type: 'text/csv;charset=utf-8' }), 'omr-results.csv');
   };
   $('#resSync').onclick = async () => { await pull(true); renderResults(); };
 
@@ -534,14 +617,14 @@
   };
 
   // ---------- settings ----------
-  function fillSettings() { $('#sPer').value = S.per; $('#sNeg').value = S.neg; $('#sTim').value = S.timerPct; $('#sThr').value = S.thr; $('#sFill').value = S.fillPct; $('#sUrl').value = S.url; }
+  function fillSettings() { $('#sPer').value = S.per; $('#sNeg').value = S.neg; $('#sTim').value = S.timerPct; $('#sThr').value = S.thr; $('#sFill').value = S.fillPct; $('#sPass').value = S.passPct; $('#sUrl').value = S.url; }
   $('#sSave').onclick = async () => {
     const m = $('#sMsg'); m.className = 'msg';
     if ($('#sPin').value !== S.pin) { m.textContent = 'Wrong admin PIN.'; return; }
-    const per = parseFloat($('#sPer').value), neg = parseFloat($('#sNeg').value), tp = parseFloat($('#sTim').value), thr = parseFloat($('#sThr').value), fp = parseFloat($('#sFill').value);
-    if ([per, neg, tp, thr, fp].some(isNaN) || fp < 30 || fp > 95 || per < 0 || neg < 0 || tp < 0 || tp > 100 || thr < 0.03 || thr > 0.6) { m.textContent = 'Please enter valid values.'; return; }
+    const per = parseFloat($('#sPer').value), neg = parseFloat($('#sNeg').value), tp = parseFloat($('#sTim').value), thr = parseFloat($('#sThr').value), fp = parseFloat($('#sFill').value), pp = parseFloat($('#sPass').value);
+    if ([per, neg, tp, thr, fp, pp].some(isNaN) || fp < 30 || fp > 95 || pp < 0 || pp > 100 || per < 0 || neg < 0 || tp < 0 || tp > 100 || thr < 0.03 || thr > 0.6) { m.textContent = 'Please enter valid values.'; return; }
     const np = $('#sNewPin').value.trim(), oldPin = S.pin;
-    S = Object.assign(S, { per, neg, timerPct: tp, thr, fillPct: fp, url: $('#sUrl').value.trim() });
+    S = Object.assign(S, { per, neg, timerPct: tp, thr, fillPct: fp, passPct: pp, url: $('#sUrl').value.trim() });
     if (np) S.pin = np;
     saveSettings(); pinOK = true; updateTimerBtn(); refreshResult();
     $('#sNewPin').value = ''; $('#sPin').value = '';
