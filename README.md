@@ -91,3 +91,13 @@ The finder removes thin lines (page borders, text) before looking for solid squa
 - When a sheet type is created, the positions of the black corner squares are saved with it (`mk`), even if the four handles were placed somewhere else (e.g. on the bubble area).
 - Scanning then lines the photo up on the squares automatically. Squares are told apart from filled answer bubbles by their corners.
 - Older sheet types saved without this: do one manual alignment (Adjust corners → Done); the app learns the squares and later scans are automatic. Or re-create the sheet type.
+
+
+## Live camera scan (v6, part 1)
+- Scan tab → **Live scan**: the camera shows a box on the four black squares (orange while moving, green when locked). When locked, **Read & Submit** appears (or tick **Auto-submit**). A clean sheet is saved at once and the camera stays on for the next sheet; anything doubtful (two marks, partly filled, bad alignment) opens the normal review screen. Remove the scanned sheet before showing the next one.
+
+## Question papers (v6, part 2)
+- **Questions** tab: add 1–100 questions by hand or paste them all at once (`1. text` + `(a) … (b) … (c) … (d) …`, Bengali `১।` / `ক) খ)` also work; `Ans: b` or a `*` after an option marks the answer).
+- Heading lines (4 lines + info line) and a logo can be set per paper. Up to 60 questions fit one A4 page, more use two pages. **Preview pages** / **Download question paper (PDF)**.
+- **Save paper & answer key** stores the paper in the open workspace (everyone in a group sees it) and creates an answer key linked to the chosen OMR sheet type, ready in the Scan tab.
+- Backend: `Code.gs` has a new `Papers` sheet (created automatically). Redeploy a **New version** after pasting it.
