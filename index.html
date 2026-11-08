@@ -40,6 +40,16 @@ canvas{display:block;width:100%;height:auto}
 .item{display:flex;justify-content:space-between;align-items:center;padding:9px 0;border-bottom:1px solid #e2e8f0;gap:8px}
 .item small{color:#64748b;display:block}
 .two{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.qi{border:1px solid #cbd5e1;border-radius:10px;padding:8px;margin:8px 0;background:#f8fafc}
+.qh{display:flex;justify-content:space-between;align-items:center;gap:6px;margin:2px 0}
+.qh b{background:#0f766e;color:#fff;border-radius:6px;padding:1px 8px}
+.qa{font-size:12px;color:#64748b;flex:1;padding-left:6px}
+.qi textarea{width:100%;margin:4px 0;font:inherit}
+.qo{display:flex;gap:6px;align-items:center;margin:3px 0}
+.qo input{flex:1;min-width:0}
+.ob{min-width:44px;padding:8px 4px;border:2px solid #94a3b8;background:#fff;border-radius:8px;font:inherit;color:#334155}
+.ob.on{background:#16a34a;border-color:#15803d;color:#fff;font-weight:700}
+#qpPaste{width:100%;font:inherit}
 #liveOv{position:fixed;inset:0;background:#020617;z-index:70;display:none;flex-direction:column;color:#fff}
 #liveOv.on{display:flex}
 .lvTop{display:flex;justify-content:space-between;align-items:center;padding:8px 10px;gap:8px}
@@ -92,6 +102,7 @@ header select{width:auto;max-width:46vw;padding:6px;font-size:13px}
 <header><h1>OMR Scanner</h1><div class="hr"><select id="wsSel" title="Workspace"></select><span id="userPill"></span><button id="installBtn" class="b" hidden>⬇ Install</button></div></header>
 <nav>
   <button data-v="key" class="on">Answer Key</button>
+  <button data-v="qp" id="navQp">Questions</button>
   <button data-v="scan">Scan</button>
   <button data-v="res">Results</button>
   <button data-v="tpl" id="navTpl" hidden>Sheets</button>
@@ -120,6 +131,61 @@ header select{width:auto;max-width:46vw;padding:6px;font-size:13px}
   </div>
   <div class="zoom" data-for="keyCv"><button class="z" data-d="-1">−</button><span>Zoom</span><button class="z" data-d="1">＋</button></div>
   <div class="cvwrap"><canvas id="keyCv"></canvas></div>
+</section>
+
+<!-- QUESTIONS -->
+<section id="v-qp">
+  <div class="card">
+    <label>Question paper</label>
+    <select id="qpSel"></select>
+    <label>Paper name (also the name of its answer key)</label>
+    <input id="qpName" placeholder="e.g. Physics Model Test 1">
+    <div id="qpShare" class="hint"></div>
+  </div>
+  <div class="card">
+    <b>Heading of the paper</b>
+    <input id="qpH_l1" placeholder="Line 1 – institute / coaching name">
+    <input id="qpH_l2" placeholder="Line 2 – exam name">
+    <input id="qpH_l3" placeholder="Line 3 – subject / class">
+    <input id="qpH_l4" placeholder="Line 4 – title (underlined), e.g. Question Paper">
+    <input id="qpH_info" placeholder="Info line, e.g. Time: 30 minutes    Full marks: 50">
+    <img id="qpLogoPrev" class="logoPrev" alt="logo" hidden>
+    <div class="sm2" style="margin-top:6px">
+      <button class="b alt sm" id="qpLogoBtn">🖼 Add logo</button>
+      <button class="b alt sm" id="qpLogoWs">Use workspace logo</button>
+      <button class="b red sm" id="qpLogoDel" hidden>Remove</button>
+      <input type="file" id="qpLogoIn" accept="image/*" hidden>
+    </div>
+  </div>
+  <div class="card">
+    <b>Questions</b>
+    <div class="two">
+      <div><label>Option labels</label><select id="qpLs"><option value="abcd">(a) (b) (c) (d)</option><option value="ABCD">(A) (B) (C) (D)</option><option value="bn">(ক) (খ) (গ) (ঘ)</option><option value="bnum">(১) (২) (৩) (৪)</option></select></div>
+      <div><label>Number of questions (1–100)</label><input id="qpCount" type="number" min="0" max="100" inputmode="numeric"></div>
+    </div>
+    <details style="margin:8px 0">
+      <summary>📋 Paste all questions at once</summary>
+      <textarea id="qpPaste" rows="8" placeholder="1. Question text&#10;(a) option  (b) option  (c) option  (d) option&#10;2. Next question…&#10;a) …&#10;b) …"></textarea>
+      <label style="display:flex;gap:6px;align-items:center"><input type="checkbox" id="qpRep"> Replace the questions already in the list</label>
+      <button class="b" id="qpPasteBtn">Add pasted questions</button>
+      <div class="hint">Start each question with a number (1. / ১। / Q1.). Start options with a letter: (a) a) A. ক) — several options can be on one line. Add “Ans: b” or put * after the right option to mark answers automatically.</div>
+    </details>
+    <div id="qpList"></div>
+    <button class="b alt" id="qpAdd">＋ Add question</button>
+    <p class="hint">Tap the letter button of an option to mark it as the correct answer (green). Tap again to unmark.</p>
+  </div>
+  <div class="card">
+    <b>OMR sheet for the answer key</b>
+    <select id="qpTpl"></select>
+    <div id="qpTplNote" class="hint"></div>
+    <button class="b alt sm" id="qpNewTpl">＋ Add a new sheet type</button>
+    <button class="b" id="qpSave">💾 Save paper &amp; answer key</button>
+    <button class="b alt" id="qpPrevBtn">👁 Preview pages</button>
+    <button class="b alt" id="qpPdf">⬇ Download question paper (PDF)</button>
+    <button class="b red" id="qpDel">Delete this paper</button>
+    <div id="qpMsg" class="msg"></div>
+  </div>
+  <div id="qpPrev"></div>
 </section>
 
 <!-- SCAN -->
@@ -378,5 +444,6 @@ header select{width:auto;max-width:46vw;padding:6px;font-size:13px}
 <script src="omr-core.js"></script>
 <script src="app.js"></script>
 <script src="live.js"></script>
+<script src="paper.js"></script>
 </body>
 </html>
