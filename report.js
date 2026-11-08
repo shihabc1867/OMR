@@ -22,12 +22,12 @@
   // Logo on the left, up to four lines of text beside/under it. Returns the y below the header.
   function header(x, h, logo, caption) {
     h = h || {};
-    const L = 190, top = 50, hasLogo = !!logo;
+    const L = 160, top = 50, hasLogo = !!logo, cx = PW / 2;
+    const logoR = M + L + 16;                          // right edge of the logo area
     if (hasLogo) {
       const k = Math.min(L / logo.width, L / logo.height), w = logo.width * k, hh = logo.height * k;
       x.drawImage(logo, M, top + (L - hh) / 2, w, hh);
     }
-    const x0 = hasLogo ? M + L + 20 : M, x1 = PW - M, cx = (x0 + x1) / 2, maxW = x1 - x0;
     const lines = [
       { t: h.l1, size: 46, color: BLACK },
       { t: h.l2, size: 40, color: BLACK },
@@ -36,6 +36,8 @@
     ].filter(l => l.t && String(l.t).trim());
     let y = top + 30;
     lines.forEach(l => {
+      // The text is centred on the PAGE. A line that runs beside the logo gets symmetric room (so it never touches the logo); lines below the logo use the full width.
+      const maxW = hasLogo && y - l.size < top + L ? 2 * (cx - logoR) : PW - 2 * M;
       const s = fit(x, l.t, maxW, l.size, true); x.fillStyle = l.color; x.textAlign = 'center'; x.fillText(l.t, cx, y);
       if (l.ul) { const w = x.measureText(l.t).width; x.fillRect(cx - w / 2, y + s * 0.55, w, 3); }
       y += s + 18;
