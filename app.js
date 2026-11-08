@@ -25,6 +25,7 @@
   let customTpls = LS.get('omr_templates', []);   // sheet types shared by the admin: [{id,name,W,H,ref,align,rx,ry,labels,groups}]
   let keys = {};                                  // answer keys of the open workspace: id -> {id,name,tplId,answers:{ "1":optIndex }}
   let results = [];
+  let papers = {};                                 // question papers of the open workspace: id -> {id,name,tplId,keyId,ls,head,qs,logo,updated,by}
   let keyState = { id: '', tplId: 'builtin', answers: {} };
   let sc = { sel: null };
   let submitted = false, timerOn = false, liveMode = false;   // liveMode: the last scan came from the live camera, so "Next student" reopens it
@@ -33,7 +34,7 @@
   const getTpl = id => allTpls().find(t => t.id === id) || null;
   const labelOf = (tpl, o) => (tpl.labels && tpl.labels[o]) || String.fromCharCode(65 + o);
   const wsKey = id => 'omr_w_' + id;
-  const saveWsCache = () => { if (wsId) LS.set(wsKey(wsId), { keys, results, settings: WSS, logo: WLOGO }); };
+  const saveWsCache = () => { if (wsId) LS.set(wsKey(wsId), { keys, results, settings: WSS, logo: WLOGO, papers }); };
   const saveSettings = () => { LS.set('omr_device', DEV); saveWsCache(); };
   const saveKeys = saveWsCache, saveResults = saveWsCache;
   const saveTpls = () => LS.set('omr_templates', customTpls);
@@ -55,6 +56,7 @@
   document.querySelectorAll('nav button').forEach(b => b.onclick = () => {
     document.querySelectorAll('nav button').forEach(x => x.classList.toggle('on', x === b));
     document.querySelectorAll('section').forEach(s => s.classList.toggle('on', s.id === 'v-' + b.dataset.v));
+    if (b.dataset.v === 'qp' && window.Paper) Paper.show();
     if (b.dataset.v === 'res') renderResults();
     if (b.dataset.v === 'scan') fillSelects();
     if (b.dataset.v === 'tpl') renderTplList();
@@ -781,10 +783,11 @@
   function loadWs(wid) {
     wsId = wid; LS.set('omr_ws_' + A.user.id, wid); lastSig = '';
     const c = LS.get(wsKey(wid), null) || {};
-    keys = c.keys || {}; results = c.results || []; WSS = normWss(c.settings); WLOGO = c.logo || ''; logoDraft = null; applyS();
+    keys = c.keys || {}; results = c.results || []; papers = c.papers || {}; WSS = normWss(c.settings); WLOGO = c.logo || ''; logoDraft = null; applyS();
     keyState = { id: '', tplId: 'builtin', answers: {} }; sc = { sel: null }; submitted = false;
     $('#keyName').value = ''; $('#scanArea').hidden = true; $('#resBox').hidden = true;
     fillSelects(); renderKey(); updateTimerBtn(); fillWsForm(); renderResults();
+    if (window.Paper && Paper.reset) { Paper.reset(); }
   }
   $('#wsSel').onchange = async () => { const v = $('#wsSel').value; await flush(); loadWs(v); pullWs(true); };
   let lastSig = '';
@@ -796,14 +799,16 @@
     if (!r || !r.ok) { if (loud) toast(trErr(r && r.error)); return; }
     if (wid !== wsId || outbox.length) return;
     const nk = {}; r.keys.forEach(k => { nk[k.id] = k; });
-    const nset = normWss(r.settings), sig = JSON.stringify([nk, r.results, nset, r.logo]);
+    const np = {}; (r.papers || []).forEach(p => { np[p.id] = p; });
+    const nset = normWss(r.settings), sig = JSON.stringify([nk, r.results, nset, r.logo, np]);
     if (sig === lastSig) { if (loud) toast('Up to date.'); return; }
     const setChanged = JSON.stringify(nset) !== JSON.stringify(WSS) || r.logo !== WLOGO;
-    lastSig = sig; keys = nk; results = r.results; WSS = nset; WLOGO = r.logo || ''; applyS(); saveWsCache();
+    lastSig = sig; keys = nk; papers = np; results = r.results; WSS = nset; WLOGO = r.logo || ''; applyS(); saveWsCache();
     if (keyState.id && !keys[keyState.id]) { keyState = { id: '', tplId: 'builtin', answers: {} }; $('#keyName').value = ''; }
     fillSelects(); renderKey(); updateTimerBtn(); if (setChanged && !logoDraft && !$('#v-set').classList.contains('on')) fillWsForm();
     if ($('#v-res').classList.contains('on')) renderResults();
     if (submitted) refreshResult();
+    if (window.Paper && Paper.refresh) Paper.refresh();
   }
   async function pullDir() {
     if (!A || !A.token) return false;
@@ -1010,5 +1015,13 @@
   if (A && A.token && A.user) startSession(false); else showAuth('');
   setInterval(() => { if (A && A.token && !document.hidden) { pullWs(false); if ((setInterval.n = (setInterval.n || 0) + 1) % 3 === 0) pullDir(); } }, 15000);
   document.addEventListener('visibilitychange', () => { if (!document.hidden && A && A.token) { pullWs(false); pullDir(); } });
+  // ---------- bridge for paper.js (question papers) ----------
+  window.OMRApp = {
+    tpls: allTpls, getTpl, papers: () => papers, isGroup: () => wsId.indexOf('g:') === 0, me: () => (A && A.user) || null,
+    canUp, gotoTab, resizeLogo, needReport, download, wsLogo: () => WLOGO, wsHead: () => WSS.header,
+    savePaper(p) { papers[p.id] = p; saveWsCache(); return queue('savePaper', { wid: wsId, paper: p }, 'paper:' + p.id); },
+    deletePaper(id) { delete papers[id]; saveWsCache(); queue('deletePaper', { wid: wsId, id }, 'paper:' + id); },
+    saveKey(k) { keys[k.id] = k; saveKeys(); fillSelects(); renderKey(); return queue('saveKey', { wid: wsId, key: k }, 'key:' + k.id); }
+  };
   window.__omr = { get state() { return { S, keys, results, sc, keyState, customTpls, wiz }; } }; // for debugging / tests
 })();
