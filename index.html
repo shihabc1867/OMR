@@ -40,6 +40,24 @@ canvas{display:block;width:100%;height:auto}
 .item{display:flex;justify-content:space-between;align-items:center;padding:9px 0;border-bottom:1px solid #e2e8f0;gap:8px}
 .item small{color:#64748b;display:block}
 .two{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+#liveOv{position:fixed;inset:0;background:#020617;z-index:70;display:none;flex-direction:column;color:#fff}
+#liveOv.on{display:flex}
+.lvTop{display:flex;justify-content:space-between;align-items:center;padding:8px 10px;gap:8px}
+.lvTop b{font-size:15px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.lvStage{position:relative;background:#000;flex:0 1 auto}
+#lvVid{display:block;width:100%;max-height:58vh;object-fit:contain;background:#000}
+#lvCv{position:absolute;left:0;top:0;width:100%;height:100%;pointer-events:none}
+.lvStat{padding:10px 12px;font-size:14px;text-align:center;background:#1e293b}
+.lvStat{color:#fff}.lvStat.ok{background:#14532d;color:#fff}.lvStat.warn{background:#78350f}.lvStat.bad{background:#7f1d1d}
+.lvBar{display:flex;gap:8px;align-items:center;padding:8px 10px}
+.lvBar input[type=text]{flex:1;min-width:0;padding:9px;border-radius:8px;border:1px solid #475569;background:#0f172a;color:#fff;font:inherit}
+.lvBar label{font-size:13px;display:flex;gap:6px;align-items:center;white-space:nowrap}
+#lvGo{flex:1;font-size:17px;padding:14px}
+#lvRes{position:absolute;left:0;right:0;bottom:0;background:#fff;color:#0f172a;border-radius:16px 16px 0 0;padding:14px;text-align:center;box-shadow:0 -4px 20px #0008}
+#lvRes .sc{font-size:44px;font-weight:800;color:#0f766e;line-height:1.1}
+#lvRes .w{color:#b45309;font-size:13px;min-height:16px}
+#lvBarWrap{height:5px;background:#e2e8f0;border-radius:3px;margin:8px 0;overflow:hidden}
+#lvBar{height:100%;width:100%;background:#0f766e}
 #cornerOv{position:fixed;inset:0;background:#0f172af2;z-index:50;overflow:auto;padding:10px;display:none}
 #cornerOv.on{display:block}
 #cornerOv .box{max-width:760px;margin:auto}
@@ -113,7 +131,8 @@ header select{width:auto;max-width:46vw;padding:6px;font-size:13px}
       <div><label>Student name</label><input id="stuName" placeholder="Name"></div>
       <div><label>Roll / ID</label><input id="stuId" placeholder="Roll or ID"></div>
     </div>
-    <button class="b" id="camBtn">📷 Take photo of answer sheet</button>
+    <button class="b" id="liveBtn">🎥 Live scan (box shows when the 4 squares are found)</button>
+    <button class="b alt" id="camBtn">📷 Take photo of answer sheet</button>
     <button class="b alt" id="galBtn">🖼 Choose from gallery</button>
     <input type="file" id="camIn" accept="image/*" capture="environment" hidden>
     <input type="file" id="galIn" accept="image/*" hidden>
@@ -336,7 +355,28 @@ header select{width:auto;max-width:46vw;padding:6px;font-size:13px}
     <div id="aMsg" class="msg"></div>
   </div>
 </div>
+<!-- LIVE CAMERA -->
+<div id="liveOv">
+  <div class="lvTop"><b id="lvTitle">Live scan</b><button class="b alt sm" id="lvClose">✕ Close</button></div>
+  <div class="lvStage"><video id="lvVid" playsinline muted autoplay></video><canvas id="lvCv"></canvas></div>
+  <div id="lvStat" class="lvStat">Point the camera at the sheet</div>
+  <div class="lvBar"><input type="text" id="lvName" placeholder="Name (optional)"><input type="text" id="lvId" placeholder="Roll / ID"></div>
+  <div class="lvBar">
+    <label><input type="checkbox" id="lvAuto"> Auto-submit</label>
+    <button class="b alt sm" id="lvTorch" hidden>🔦</button>
+    <button class="b" id="lvGo" hidden>✅ Read &amp; Submit</button>
+  </div>
+  <div id="lvRes" hidden>
+    <div id="lvRName" style="font-weight:700"></div>
+    <div class="sc" id="lvRScore"></div>
+    <div id="lvRDet" class="hint"></div>
+    <div class="w" id="lvRWarn"></div>
+    <div id="lvBarWrap"><div id="lvBar"></div></div>
+    <button class="b" id="lvNext">▶ Next sheet now</button>
+  </div>
+</div>
 <script src="omr-core.js"></script>
 <script src="app.js"></script>
+<script src="live.js"></script>
 </body>
 </html>
