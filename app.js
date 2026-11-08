@@ -12,22 +12,44 @@
   };
 
   // ---------- state ----------
-  const DEF = { pin: '1234', per: 1, neg: 0.25, timerPct: 3, thr: 0.18, fillPct: 70, passPct: 40, url: '' };
-  let S = Object.assign({}, DEF, LS.get('omr_settings', {}));
-  let customTpls = LS.get('omr_templates', []);   // [{id,name,W,H,ref,align,rx,ry,labels,groups}]
-  let keys = LS.get('omr_keys', {});              // id -> {id,name,tplId,answers:{ "1":optIndex }}
-  let results = LS.get('omr_results', []);
+  const DEF = { per: 1, neg: 0.25, timerPct: 3, thr: 0.18, fillPct: 70, passPct: 40 };
+  const oldSet = LS.get('omr_settings', {});                         // settings of the older single-user version
+  const DEV = Object.assign({ thr: oldSet.thr || DEF.thr, fillPct: oldSet.fillPct || DEF.fillPct }, LS.get('omr_device', {}));   // this phone only
+  let WSS = { per: DEF.per, neg: DEF.neg, timerPct: DEF.timerPct, passPct: DEF.passPct, header: { l1: '', l2: '', l3: '', l4: 'Result Sheet' } };   // rules + heading of the open workspace
+  let WLOGO = '';
+  let S = Object.assign({}, DEF);                                     // merged view used by the scanner/scoring code
+  const applyS = () => { S = Object.assign({}, DEF, { per: WSS.per, neg: WSS.neg, timerPct: WSS.timerPct, passPct: WSS.passPct }, { thr: DEV.thr, fillPct: DEV.fillPct }); };
+  let A = LS.get('omr_auth', null);                                   // { url, token, user }
+  let dir = LS.get('omr_dir', { users: [], groups: [], requests: [] });
+  let wsId = '';
+  let customTpls = LS.get('omr_templates', []);   // sheet types shared by the admin: [{id,name,W,H,ref,align,rx,ry,labels,groups}]
+  let keys = {};                                  // answer keys of the open workspace: id -> {id,name,tplId,answers:{ "1":optIndex }}
+  let results = [];
   let keyState = { id: '', tplId: 'builtin', answers: {} };
   let sc = { sel: null };
-  let submitted = false, timerOn = false, pinOK = false;
+  let submitted = false, timerOn = false;
   const builtin = OMR.builtinTemplate();
   const allTpls = () => [builtin].concat(customTpls);
   const getTpl = id => allTpls().find(t => t.id === id) || null;
   const labelOf = (tpl, o) => (tpl.labels && tpl.labels[o]) || String.fromCharCode(65 + o);
-  const saveSettings = () => LS.set('omr_settings', S);
-  const saveKeys = () => LS.set('omr_keys', keys);
-  const saveResults = () => LS.set('omr_results', results);
+  const wsKey = id => 'omr_w_' + id;
+  const saveWsCache = () => { if (wsId) LS.set(wsKey(wsId), { keys, results, settings: WSS, logo: WLOGO }); };
+  const saveSettings = () => { LS.set('omr_device', DEV); saveWsCache(); };
+  const saveKeys = saveWsCache, saveResults = saveWsCache;
   const saveTpls = () => LS.set('omr_templates', customTpls);
+  const isAdmin = () => !!(A && A.user && A.user.role === 'admin');
+  const canUp = () => !!(A && A.user && (A.user.role === 'admin' || A.user.canUpload));
+  const num = (v, d) => (typeof v === 'number' && isFinite(v) ? v : d);
+  function normWss(s) {
+    s = s || {}; const h = s.header || {};
+    return { per: num(s.per, DEF.per), neg: num(s.neg, DEF.neg), timerPct: num(s.timerPct, DEF.timerPct), passPct: num(s.passPct, DEF.passPct),
+      header: { l1: h.l1 || '', l2: h.l2 || '', l3: h.l3 || '', l4: h.l4 == null ? 'Result Sheet' : h.l4 } };
+  }
+  function toast(t) {
+    let e = $('#toast');
+    if (!e) { e = document.createElement('div'); e.id = 'toast'; e.style.cssText = 'position:fixed;left:12px;right:12px;bottom:18px;background:#0f172a;color:#fff;padding:10px 14px;border-radius:10px;z-index:90;font-size:14px;display:none'; document.body.appendChild(e); }
+    e.textContent = t; e.style.display = 'block'; clearTimeout(toast.t); toast.t = setTimeout(() => { e.style.display = 'none'; }, 4500);
+  }
 
   // ---------- tabs ----------
   document.querySelectorAll('nav button').forEach(b => b.onclick = () => {
@@ -36,7 +58,12 @@
     if (b.dataset.v === 'res') renderResults();
     if (b.dataset.v === 'scan') fillSelects();
     if (b.dataset.v === 'tpl') renderTplList();
+    if (b.dataset.v === 'grp') { renderGroups(); pullDir(); }
+    if (b.dataset.v === 'prof') { renderProfile(); pullDir(); }
+    if (b.dataset.v === 'adm') loadAdmin();
+    if (b.dataset.v === 'set') fillWsForm();
   });
+  function gotoTab(v) { const b = document.querySelector('nav button[data-v="' + v + '"]'); if (b) b.click(); }
 
   // ---------- zoom ----------
   document.querySelectorAll('.zoom').forEach(z => {
@@ -224,32 +251,25 @@
   $('#keyTpl').onchange = () => { keyState = { id: '', tplId: $('#keyTpl').value, answers: {} }; renderKey(); };
   $('#keyClear').onclick = () => { keyState.answers = {}; renderKey(); };
 
-  function requirePin() {
-    if (pinOK) return true;
-    const p = prompt('Enter admin PIN');
-    if (p === null) return false;
-    if (p === S.pin) { pinOK = true; return true; }
-    alert('Wrong PIN'); return false;
-  }
   $('#keySave').onclick = async () => {
     const msg = $('#keyMsg'); msg.className = 'msg';
     if (!Object.keys(keyState.answers).length) { msg.textContent = 'Set the answer for at least one question.'; return; }
-    if (!requirePin()) return;
-    const id = keyState.id || 'k' + Date.now();
+    const id = keyState.id || 'k' + Date.now().toString(36) + Math.floor(Math.random() * 1296).toString(36);
     const name = $('#keyName').value.trim() || 'Answer key ' + (Object.keys(keys).length + 1);
     keys[id] = { id, name, tplId: keyState.tplId, answers: Object.assign({}, keyState.answers) };
     keyState.id = id; $('#keyName').value = name; saveKeys(); fillSelects(); renderKey();
-    msg.className = 'msg ok'; msg.textContent = '✔ Saved on this device.';
-    const r = await api('saveKey', { key: keys[id] });
-    if (r && !r.ok) { msg.className = 'msg'; msg.textContent = 'Saved on this device, but not on the server: ' + (r.error || 'error'); }
-    else if (r) msg.textContent = '✔ Saved (also on the server).';
+    msg.className = 'msg ok'; msg.textContent = '✔ Saved on this phone — sharing…';
+    const r = await queue('saveKey', { wid: wsId, key: keys[id] }, 'key:' + id);
+    if (r.ok) msg.textContent = '✔ Saved' + (wsId.indexOf('g:') === 0 ? ' and shared with the group.' : '.');
+    else if (r.error === 'offline') msg.textContent = '✔ Saved on this phone. It will be uploaded when the internet is back.';
+    else { msg.className = 'msg'; msg.textContent = 'Saved on this phone, but the server said: ' + r.error; }
   };
   $('#keyDel').onclick = () => {
     const id = keyState.id;
     if (!id) { $('#keyMsg').className = 'msg'; $('#keyMsg').textContent = 'Select a saved answer key first.'; return; }
-    if (!confirm('Delete this answer key?') || !requirePin()) return;
+    if (!confirm('Delete this answer key?' + (wsId.indexOf('g:') === 0 ? ' It will be deleted for the whole group.' : ''))) return;
     delete keys[id]; saveKeys(); keyState = { id: '', tplId: 'builtin', answers: {} }; $('#keyName').value = '';
-    fillSelects(); renderKey(); api('deleteKey', { id });
+    fillSelects(); renderKey(); queue('deleteKey', { wid: wsId, id }, 'key:' + id);
   };
   function download(blob, name) {
     const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = name;
@@ -385,7 +405,7 @@
     const rec = Object.assign({ id: sc.rid, t: Date.now(), keyId: key.id, keyName: key.name, student: stuNow().name || 'Unknown', sid: stuNow().id, sel: sc.sel.map(s => s.slice()), bad: Array.from(sc.bad || []), timer: timerOn }, r);
     const i = results.findIndex(x => x.id === rec.id);
     if (i >= 0) { rec.t = results[i].t; results[i] = rec; } else results.unshift(rec);
-    saveResults(); clearTimeout(syncT); syncT = setTimeout(() => api('saveResult', { result: rec }), 800);
+    saveResults(); clearTimeout(syncT); syncT = setTimeout(() => queue('saveResult', { wid: wsId, result: rec }, 'res:' + rec.id), 600);
   }
   $('#submitBtn').onclick = () => {
     if (!sc.sel) return; if (!keys[$('#scanKey').value]) { smsg('Choose an answer key.'); return; }
@@ -399,7 +419,7 @@
     $('#scanArea').hidden = true; $('#resBox').hidden = true; sc = { sel: null }; submitted = false;
     $('#stuName').value = ''; $('#stuId').value = ''; smsg('Ready for the next sheet.', true); window.scrollTo({ top: 0, behavior: 'smooth' });
   };
-  $('#stuPdf').onclick = () => { const r = results.find(x => x.id === sc.rid); if (r) printStudents([r], 'Result-' + (r.sid || r.student)); };
+  $('#stuPdf').onclick = () => { const r = results.find(x => x.id === sc.rid); if (r) pdfStudents([r], t => smsg(t, true)); };
 
   // ---------- results tab ----------
   const passPct = () => (S.passPct == null ? 40 : S.passPct);
@@ -433,64 +453,75 @@
       const R = ranked(kid); if (!R.length) return '';
       const fails = R.filter(x => isFail(x.r)).length;
       return `<div class="grp">${esc(R[0].r.keyName)} — ${R.length} student(s)${fails ? ', ' + fails + ' below ' + fmt(passPct()) + '%' : ''}</div>` + R.map(({ r, rank }) =>
-        `<div class="item${isFail(r) ? ' fail' : ''}"><div><span class="rk">${rank}</span><b>${esc(nameOf(r))}</b>${r.sid ? ' • ID ' + esc(r.sid) : ''}<small>Correct ${r.c} • Wrong ${r.w} • Blank ${r.b}${r.timer ? ' • Timer penalty' : ''} • ${p1(pctOf(r))}%<br>${esc(new Date(r.t).toLocaleString())}${r.wrongQs && r.wrongQs.length ? '<br>Wrong Q: ' + esc(r.wrongQs.join(', ')) : ''}</small></div>
+        `<div class="item${isFail(r) ? ' fail' : ''}"><div><span class="rk">${rank}</span><b>${esc(nameOf(r))}</b>${r.sid ? ' • ID ' + esc(r.sid) : ''}<small>Correct ${r.c} • Wrong ${r.w} • Blank ${r.b}${r.timer ? ' • Timer penalty' : ''} • ${p1(pctOf(r))}%<br>${esc(new Date(r.t).toLocaleString())}${r.by ? ' • by ' + esc(r.by) : ''}${r.wrongQs && r.wrongQs.length ? '<br>Wrong Q: ' + esc(r.wrongQs.join(', ')) : ''}</small></div>
         <div style="text-align:right"><b class="ok">${fmt(r.fin)}/${fmt(r.total)}</b><br><button class="b alt sm" data-pdf="${esc(r.id)}">PDF</button> <button class="b red sm" data-del="${esc(r.id)}">Delete</button></div></div>`).join('');
     }).join('');
     L.querySelectorAll('[data-del]').forEach(b => b.onclick = () => {
-      if (!confirm('Delete this result?') || !requirePin()) return;
-      results = results.filter(r => r.id !== b.dataset.del); saveResults(); renderResults(); api('deleteResult', { id: b.dataset.del });
+      if (!confirm('Delete this result?' + (wsId.indexOf('g:') === 0 ? ' It will be deleted for the whole group.' : ''))) return;
+      results = results.filter(r => r.id !== b.dataset.del); saveResults(); renderResults(); queue('deleteResult', { wid: wsId, id: b.dataset.del }, 'res:' + b.dataset.del);
     });
-    L.querySelectorAll('[data-pdf]').forEach(b => b.onclick = () => { const r = results.find(x => x.id === b.dataset.pdf); if (r) printStudents([r], 'Result-' + (r.sid || r.student)); });
+    L.querySelectorAll('[data-pdf]').forEach(b => b.onclick = () => { const r = results.find(x => x.id === b.dataset.pdf); if (r) pdfStudents([r], pdfMsg); });
   }
 
-  // ---------- PDF (print screen -> Save as PDF) ----------
-  const red = r => (isFail(r) ? ' class="fail"' : '');
-  const today = () => new Date().toLocaleDateString();
-  function meritHtml(kid) {
-    const R = ranked(kid); if (!R.length) return '';
-    const tot = R[0].r.total, fails = R.filter(x => isFail(x.r)).length, avg = R.reduce((s, x) => s + x.r.fin, 0) / R.length;
-    return `<div class="page"><h2>Merit list — ${esc(R[0].r.keyName)}</h2>
-      <div class="sub">${esc(today())} • ${R.length} student(s) • Total marks ${fmt(tot)} • Highest ${fmt(R[0].r.fin)} • Average ${p1(avg)} • Pass mark ${fmt(passPct())}% • Below pass mark: ${fails}</div>
-      <table><thead><tr><th class="n">Rank</th><th>Name</th><th>Roll / ID</th><th class="n">Correct</th><th class="n">Wrong</th><th class="n">Blank</th><th class="n">Marks</th><th class="n">%</th></tr></thead><tbody>` +
-      R.map(({ r, rank }) => `<tr${red(r)}><td class="n">${rank}</td><td>${esc(nameOf(r))}</td><td>${esc(r.sid || '')}</td><td class="n">${r.c}</td><td class="n">${r.w}</td><td class="n">${r.b}</td><td class="n">${fmt(r.fin)} / ${fmt(r.total)}</td><td class="n">${p1(pctOf(r))}</td></tr>`).join('') +
-      '</tbody></table></div>';
+  // ---------- result sheets: downloadable PDF files ----------
+  function needReport() {
+    return new Promise(res => {
+      if (window.Report) return res(true);
+      const s = document.createElement('script'); s.src = 'report.js'; s.onload = () => res(!!window.Report); s.onerror = () => res(false); document.head.appendChild(s);
+    });
   }
-  function studentHtml(r) {
-    const R = ranked(r.keyId), me = R.find(x => x.r.id === r.id), key = keys[r.keyId], f = isFail(r);
-    const tpl = key ? allTpls().find(t => t.id === key.tplId) : null, lab = (tpl && tpl.labels) || ['A', 'B', 'C', 'D', 'E', 'F'];
-    let ans = '';
-    if (key) {
-      const bad = new Set(r.bad || []), wr = new Set(r.wrongQs || []);
-      ans = '<h3 style="margin:14px 0 4px;font-size:15px">Answers</h3><div class="ans">' + Object.keys(key.answers).map(Number).sort((x, y) => x - y).map(q => {
-        const s = (r.sel && r.sel[q - 1]) || [], mine = s.length ? s.map(i => lab[i] || i + 1).join('+') : '–', good = lab[key.answers[q]] || key.answers[q];
-        return `<div class="${wr.has(q) ? 'wrong' : ''}">${q}. ${esc(mine)}${bad.has(q - 1) ? '*' : ''} ${wr.has(q) ? '✗ (' + esc(good) + ')' : s.length ? '✓' : ''}</div>`;
-      }).join('') + '</div><div class="sub">✗ = wrong, correct answer in brackets • * = multiple or partly filled marks (counted wrong)</div>';
+  const NO_REPORT = 'The PDF file maker (report.js, part 2) is not installed on the website yet.';
+  const pdfMsg = t => { const m = $('#pdfMsg'); m.textContent = t || ''; };
+  const rowColor = (r, rank) => (isFail(r) ? '#e11d1d' : rank <= 3 ? '#5b8f2a' : '#000');
+  const tick = () => new Promise(r => setTimeout(r, 0));
+  const safeName = s => String(s || '').replace(/[^\w\u0980-\u09FF.-]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 40) || 'file';
+  function answersOf(r) {
+    const key = keys[r.keyId]; if (!key) return null;
+    const tpl = getTpl(key.tplId), lab = (tpl && tpl.labels) || ['A', 'B', 'C', 'D', 'E', 'F'], bad = new Set(r.bad || []), wr = new Set(r.wrongQs || []);
+    return Object.keys(key.answers).map(Number).sort((x, y) => x - y).map(q => {
+      const s = (r.sel && r.sel[q - 1]) || [];
+      return { q, mine: s.length ? s.map(i => lab[i] || i + 1).join('+') : '–', good: lab[key.answers[q]] || key.answers[q], wrong: wr.has(q), multi: bad.has(q - 1), answered: s.length > 0 };
+    });
+  }
+  async function pdfMerit(msg) {
+    const ids = selKeyIds().filter(k => ranked(k).length); if (!ids.length) { alert('No results to put in the PDF.'); return; }
+    if (!(await needReport())) { msg(NO_REPORT); return; }
+    msg('Creating PDF…'); const logo = await Report.loadImage(WLOGO), doc = new Report.Doc();
+    for (const kid of ids) {
+      const R = ranked(kid); await tick();
+      Report.merit({ header: WSS.header, logo, caption: R[0].r.keyName, rows: R.map(({ r, rank }) => ({ rank, id: r.sid || '', name: nameOf(r), pos: r.c, neg: r.w, total: r.fin, color: rowColor(r, rank) })) }, c => doc.add(c));
     }
-    return `<div class="page"><h2>OMR Result</h2><div class="sub">${esc(r.keyName)} • ${esc(new Date(r.t).toLocaleDateString())}</div>
-      <div class="kv"><b>Name</b><span${f ? ' class="fail"' : ''}>${esc(nameOf(r))}</span><b>Roll / ID</b><span${f ? ' class="fail"' : ''}>${esc(r.sid || '—')}</span>
-      <b>Rank</b><span>${me ? me.rank + ' of ' + me.n : '—'}</span>
-      <b>Marks</b><span class="score${f ? ' fail' : ''}">${fmt(r.fin)} / ${fmt(r.total)} (${p1(pctOf(r))}%)</span>
-      <b>Result</b><span${f ? ' class="fail"' : ''}>${f ? 'Below pass mark (' + fmt(passPct()) + '%)' : 'Passed'}</span>
-      <b>Correct</b><span>${r.c}</span><b>Wrong</b><span>${r.w}</span><b>Unanswered</b><span>${r.b}</span>
-      <b>Wrong-answer penalty</b><span>− ${fmt(r.neg)}</span>${r.timer ? '<b>Second Timer penalty</b><span>− ' + fmt(r.tim) + '</span>' : ''}</div>${ans}</div>`;
+    download(doc.blob(), 'Merit-list' + (ids.length === 1 ? '-' + safeName(ranked(ids[0])[0].r.keyName) : '') + '.pdf');
+    msg('✔ PDF downloaded (' + doc.pages() + ' page' + (doc.pages() > 1 ? 's' : '') + ').');
   }
-  function openPrint(html, title) {
-    if (!html) { alert('No results to print.'); return; }
-    $('#printBody').innerHTML = html; $('#printOv').classList.add('on'); $('#printOv').scrollTop = 0; $('#printOv').dataset.title = title || 'OMR-Result';
+  async function pdfStudents(list, msg) {
+    if (!list.length) { alert('No results to put in the PDF.'); return; }
+    if (!(await needReport())) { msg(NO_REPORT); return; }
+    msg('Creating PDF…'); const logo = await Report.loadImage(WLOGO), doc = new Report.Doc();
+    for (let i = 0; i < list.length; i++) {
+      const r = list[i], me = ranked(r.keyId).find(x => x.r.id === r.id), rank = me ? me.rank : 1, f = isFail(r), col = rowColor(r, rank);
+      const lines = [
+        { t: 'Merit position: ' + rank + ' of ' + (me ? me.n : 1), color: col, bold: true },
+        { t: f ? 'Result: Below the pass mark (' + fmt(passPct()) + '%)' : 'Result: Passed', color: f ? '#e11d1d' : '#000', bold: true },
+        { t: 'Marks: ' + fmt(r.fin) + ' / ' + fmt(r.total) + '  (' + p1(pctOf(r)) + '%)', color: col },
+        { t: 'Correct ' + r.c + '     Wrong ' + r.w + '     Unanswered ' + r.b },
+        { t: 'Wrong-answer penalty: − ' + fmt(r.neg) + (r.timer ? '     Second Timer penalty: − ' + fmt(r.tim) : '') }
+      ];
+      await tick(); msg('Creating PDF… ' + (i + 1) + ' / ' + list.length);
+      Report.student({ header: WSS.header, logo, caption: r.keyName, row: { rank, id: r.sid || '', name: nameOf(r), pos: r.c, neg: r.w, total: r.fin, color: col }, lines, answers: answersOf(r) }, c => doc.add(c));
+    }
+    download(doc.blob(), (list.length === 1 ? 'Result-' + safeName(list[0].sid || list[0].student) : 'All-results') + '.pdf');
+    msg('✔ PDF downloaded (' + doc.pages() + ' page' + (doc.pages() > 1 ? 's' : '') + ').');
   }
-  function printStudents(list, title) { openPrint(list.map(studentHtml).join(''), title); }
-  document.body.appendChild($('#printOv'));   // must be a direct child of <body> for the print rules
-  $('#prClose').onclick = () => $('#printOv').classList.remove('on');
-  $('#prPrint').onclick = () => { const t = document.title; document.title = $('#printOv').dataset.title || 'OMR-Result'; window.print(); setTimeout(() => { document.title = t; }, 1500); };
-  $('#pdfAll').onclick = () => openPrint(selKeyIds().map(meritHtml).join(''), 'Merit-list');
-  $('#pdfEach').onclick = () => openPrint(selKeyIds().map(kid => ranked(kid).map(x => studentHtml(x.r)).join('')).join(''), 'All-results');
+  $('#pdfAll').onclick = () => pdfMerit(pdfMsg);
+  $('#pdfEach').onclick = () => { const all = []; selKeyIds().forEach(kid => ranked(kid).forEach(x => all.push(x.r))); pdfStudents(all, pdfMsg); };
   $('#resCsv').onclick = () => {
     const q = v => '"' + String(v).replace(/"/g, '""') + '"';
-    const rows = [['Rank', 'Name', 'Roll/ID', 'Answer key', 'Time', 'Correct', 'Wrong', 'Unanswered', 'Total marks', 'Wrong penalty', 'Timer penalty', 'Score', 'Percent', 'Status', 'Wrong questions']];
-    selKeyIds().forEach(kid => ranked(kid).forEach(({ r, rank }) => rows.push([rank, nameOf(r), r.sid || '', r.keyName, new Date(r.t).toLocaleString(), r.c, r.w, r.b, r.total, r.neg, r.tim, r.fin, p1(pctOf(r)), isFail(r) ? 'Below pass mark' : 'Pass', (r.wrongQs || []).join(' ')])));
+    const rows = [['Rank', 'Name', 'Roll/ID', 'Answer key', 'Time', 'Correct', 'Wrong', 'Unanswered', 'Total marks', 'Wrong penalty', 'Timer penalty', 'Score', 'Percent', 'Status', 'Scanned by', 'Wrong questions']];
+    selKeyIds().forEach(kid => ranked(kid).forEach(({ r, rank }) => rows.push([rank, nameOf(r), r.sid || '', r.keyName, new Date(r.t).toLocaleString(), r.c, r.w, r.b, r.total, r.neg, r.tim, r.fin, p1(pctOf(r)), isFail(r) ? 'Below pass mark' : 'Pass', r.by || '', (r.wrongQs || []).join(' ')])));
     download(new Blob(['\ufeff' + rows.map(r => r.map(q).join(',')).join('\n')], { type: 'text/csv;charset=utf-8' }), 'omr-results.csv');
   };
-  $('#resSync').onclick = async () => { await pull(true); renderResults(); };
+  $('#resSync').onclick = async () => { await pullWs(true); renderResults(); };
 
   // ---------- sheet types (templates) ----------
   function renderTplList() {
@@ -498,13 +529,13 @@
       const ks = {}; t.groups.forEach(g => ks[g.pts.length] = (ks[g.pts.length] || 0) + 1);
       const opt = Object.keys(ks).map(k => ks[k] + '×' + k).join(', ');
       return `<div class="item"><div><b>${esc(t.name)}</b><small>${t.groups.length} questions • options: ${opt} • alignment: ${esc(t.align)}</small></div>
-      ${t.builtin ? '' : `<button class="b red sm" data-dt="${esc(t.id)}">Delete</button>`}</div>`;
+      ${t.builtin || !canUp() || !(isAdmin() || !t.by || t.by === A.user.id) ? '' : `<button class="b red sm" data-dt="${esc(t.id)}">Delete</button>`}</div>`;
     }).join('');
     document.querySelectorAll('[data-dt]').forEach(b => b.onclick = () => {
       const id = b.dataset.dt;
       if (Object.keys(keys).some(k => keys[k].tplId === id)) { alert('Delete the answer keys that use this sheet type first.'); return; }
-      if (!confirm('Delete this sheet type?') || !requirePin()) return;
-      customTpls = customTpls.filter(t => t.id !== id); saveTpls(); renderTplList(); fillSelects(); api('deleteTemplate', { id });
+      if (!confirm('Delete this sheet type for everyone?')) return;
+      customTpls = customTpls.filter(t => t.id !== id); saveTpls(); renderTplList(); fillSelects(); queue('deleteTemplate', { id }, 'tpl:' + id);
     });
   }
 
@@ -602,7 +633,7 @@
   $('#wSave').onclick = async () => {
     const m = $('#wMsg'); m.className = 'msg';
     if (!wiz || wiz.groups.length < 2) { m.textContent = 'Fewer than 2 questions were found. Fix the bubbles first.'; return; }
-    if (!requirePin()) return;
+    if (!canUp()) { m.textContent = 'Only the admin (or a user the admin allowed) can add sheet types.'; return; }
     const name = $('#wName').value.trim() || 'Sheet ' + (customTpls.length + 1);
     const maxK = Math.max.apply(null, wiz.groups.map(g => g.pts.length)), lab = $('#wLab').value;
     const labels = []; for (let o = 0; o < maxK; o++) labels.push(lab === '1' ? String(o + 1) : String.fromCharCode((lab === 'a' ? 97 : 65) + o));
@@ -612,50 +643,323 @@
     fillSelects(); renderTplList();
     wiz = null; $('#wizEdit').hidden = true; $('#wizStart').hidden = false; $('#wName').value = '';
     wmsg('✔ Sheet type “' + name + '” saved. Now create an answer key for it in the Answer Key tab.', true);
-    const r = await api('saveTemplate', { template: tpl });
-    if (r && !r.ok) wmsg('Saved on this device, but not on the server: ' + (r.error || 'error'));
+    tpl.by = A.user.id;
+    const r = await queue('saveTemplate', { template: tpl }, 'tpl:' + tpl.id);
+    if (r.ok) wmsg('✔ Sheet type “' + name + '” saved and available to every user. Now create an answer key for it in the Answer Key tab.', true);
+    else if (r.error === 'offline') wmsg('✔ Saved on this phone; it will be uploaded when the internet is back.', true);
+    else wmsg('Saved on this phone, but the server said: ' + r.error);
   };
 
   // ---------- settings ----------
-  function fillSettings() { $('#sPer').value = S.per; $('#sNeg').value = S.neg; $('#sTim').value = S.timerPct; $('#sThr').value = S.thr; $('#sFill').value = S.fillPct; $('#sPass').value = S.passPct; $('#sUrl').value = S.url; }
-  $('#sSave').onclick = async () => {
-    const m = $('#sMsg'); m.className = 'msg';
-    if ($('#sPin').value !== S.pin) { m.textContent = 'Wrong admin PIN.'; return; }
-    const per = parseFloat($('#sPer').value), neg = parseFloat($('#sNeg').value), tp = parseFloat($('#sTim').value), thr = parseFloat($('#sThr').value), fp = parseFloat($('#sFill').value), pp = parseFloat($('#sPass').value);
-    if ([per, neg, tp, thr, fp, pp].some(isNaN) || fp < 30 || fp > 95 || pp < 0 || pp > 100 || per < 0 || neg < 0 || tp < 0 || tp > 100 || thr < 0.03 || thr > 0.6) { m.textContent = 'Please enter valid values.'; return; }
-    const np = $('#sNewPin').value.trim(), oldPin = S.pin;
-    S = Object.assign(S, { per, neg, timerPct: tp, thr, fillPct: fp, passPct: pp, url: $('#sUrl').value.trim() });
-    if (np) S.pin = np;
-    saveSettings(); pinOK = true; updateTimerBtn(); refreshResult();
-    $('#sNewPin').value = ''; $('#sPin').value = '';
-    m.className = 'msg ok'; m.textContent = '✔ Saved.';
-    if (S.url) {
-      const r = await api('saveSettings', { pin: oldPin, newPin: np || undefined, settings: { per, neg, timerPct: tp, thr } });
-      if (r && !r.ok) { m.className = 'msg'; m.textContent = 'Saved on this device, but not on the server: ' + (r.error || 'error'); }
-      else if (r) m.textContent = '✔ Saved (also on the server).';
-    }
+  // ---------- network + outbox (changes are kept on the phone until the server has them) ----------
+  let outbox = LS.get('omr_out', []), flushing = null;
+  const trErr = e => (e === 'network' ? 'Cannot reach the server. Check the internet connection and the server address.' : e);
+  async function apiTo(url, action, payload) {
+    if (!url) return { ok: false, error: 'The server address is missing.' };
+    try {
+      const res = await fetch(url, { method: 'POST', body: JSON.stringify(Object.assign({ action, token: A && A.token }, payload)) });
+      const r = await res.json();
+      if (r && r.ok === false && r.error === 'AUTH' && action !== 'login') sessionExpired();
+      return r;
+    } catch (e) { return { ok: false, error: 'network' }; }
+  }
+  const api = (action, payload) => apiTo(A && A.url, action, payload);
+  function queue(action, payload, key) {
+    if (key) outbox = outbox.filter(o => o.key !== key);
+    outbox.push({ action, payload, key }); LS.set('omr_out', outbox);
+    return flush();
+  }
+  function flush() {
+    if (flushing) return flushing;
+    flushing = (async () => {
+      let last = { ok: true };
+      while (outbox.length && A && A.token) {
+        const it = outbox[0], r = await api(it.action, it.payload);
+        if (r && r.error === 'network') { last = { ok: false, error: 'offline' }; break; }
+        if (r && r.error === 'AUTH') { last = { ok: false, error: 'AUTH' }; break; }
+        const i = outbox.indexOf(it); if (i >= 0) outbox.splice(i, 1); LS.set('omr_out', outbox);
+        if (r && r.ok === false) { toast('Not saved on the server: ' + r.error); last = r; }
+      }
+      return last;
+    })().finally(() => { flushing = null; });
+    return flushing;
+  }
+
+  // ---------- log in / new user ----------
+  const amsg = (t, ok) => { const m = $('#aMsg'); m.textContent = t || ''; m.className = 'msg' + (ok ? ' ok' : ''); };
+  function showAuth(msg) {
+    $('#aUrl').value = (A && A.url) || oldSet.url || '';
+    if (!$('#aUrl').value) $('#aUrl').closest('details').open = true;
+    $('#authOv').classList.add('on'); amsg(msg || '', false);
+  }
+  function sessionExpired() {
+    if (!A || !A.token) return; A.token = ''; LS.set('omr_auth', A);
+    showAuth('Your login has ended. Please log in again.');
+  }
+  const authTab = up => { $('#aIn').hidden = up; $('#aUp').hidden = !up; $('#aTabIn').classList.toggle('on', !up); $('#aTabUp').classList.toggle('on', up); amsg(''); };
+  $('#aTabIn').onclick = () => authTab(false); $('#aTabUp').onclick = () => authTab(true);
+  $('#aLogin').onclick = async () => {
+    const url = $('#aUrl').value.trim(), id = $('#aId').value.trim(), pw = $('#aPw').value;
+    if (!url) { amsg('Open “Server address” below and paste the web app address.'); $('#aUrl').closest('details').open = true; return; }
+    if (!id || !pw) { amsg('Enter your ID and password.'); return; }
+    amsg('Logging in…', true);
+    const r = await apiTo(url, 'login', { id, password: pw });
+    if (!r.ok) { amsg(trErr(r.error)); return; }
+    A = { url, token: r.token, user: r.user }; LS.set('omr_auth', A); $('#aPw').value = '';
+    await startSession(r.defaultPassword);
+  };
+  $('#aPw').onkeydown = e => { if (e.key === 'Enter') $('#aLogin').click(); };
+  $('#aReg').onclick = async () => {
+    const url = $('#aUrl').value.trim(), name = $('#aName').value.trim(), mob = $('#aMob').value.trim();
+    if (!url) { amsg('Open “Server address” below and paste the web app address.'); $('#aUrl').closest('details').open = true; return; }
+    if (!name || !mob) { amsg('Enter your name and mobile number.'); return; }
+    amsg('Creating your account…', true);
+    const r = await apiTo(url, 'register', { name, mobile: mob });
+    if (!r.ok) { amsg(trErr(r.error)); return; }
+    const c = $('#aCred'); c.hidden = false;
+    c.innerHTML = 'Your ID: <b>' + esc(r.id) + '</b><br>Your password: <b>' + esc(r.password) + '</b><br><span class="hint">Write these down or take a screenshot. You can change the password after logging in.</span><br><button class="b" id="aGo">Continue to log in</button>';
+    $('#aGo').onclick = () => { $('#aId').value = r.id; $('#aPw').value = r.password; authTab(false); amsg('Tap “Log in”.', true); };
+    amsg('Account created.', true);
+  };
+  $('#logoutBtn').onclick = () => {
+    if (outbox.length && !confirm('Some changes are not uploaded yet and will be lost. Log out anyway?')) return;
+    if (!outbox.length && !confirm('Log out?')) return;
+    Object.keys(localStorage).forEach(k => { if (/^omr_(w_|ws_|dir|out|keys|results)/.test(k)) localStorage.removeItem(k); });
+    LS.set('omr_auth', { url: A ? A.url : '' }); location.reload();
   };
 
-  // ---------- Apps Script sync ----------
-  async function api(action, payload) {
-    if (!S.url) return null;
-    try {
-      const res = await fetch(S.url, { method: 'POST', body: JSON.stringify(Object.assign({ action, pin: S.pin }, payload)) });
-      return await res.json();
-    } catch (e) { return { ok: false, error: 'network problem' }; }
+  // ---------- workspaces (my own, or a group) ----------
+  const personalWid = () => 'u:' + A.user.id;
+  const groupLabel = g => g.label + (g.name ? ' — ' + g.name : '');
+  const isMemberOf = g => g.members.some(m => m.id === A.user.id);
+  const myGroups = () => dir.groups.filter(isMemberOf);
+  function wsLabel(wid) {
+    if (A && wid === personalWid()) return 'My workspace';
+    const g = dir.groups.find(x => 'g:' + x.gid === wid); return g ? groupLabel(g) : wid;
   }
-  async function pull(loud) {
-    if (!S.url) { if (loud) alert('No Apps Script URL is set in Settings.'); return; }
-    try {
-      const r = await (await fetch(S.url + (S.url.includes('?') ? '&' : '?') + 'action=bootstrap')).json();
-      if (!r.ok) throw new Error(r.error || 'error');
-      (r.templates || []).forEach(t => { if (!customTpls.some(x => x.id === t.id)) customTpls.push(t); }); saveTpls();
-      (r.keys || []).forEach(k => keys[k.id] = k); saveKeys();
-      if (r.settings) { ['per', 'neg', 'timerPct', 'thr'].forEach(f => { if (typeof r.settings[f] === 'number') S[f] = r.settings[f]; }); saveSettings(); fillSettings(); updateTimerBtn(); }
-      const have = new Set(results.map(x => x.id)); (r.results || []).forEach(x => { if (!have.has(x.id)) results.push(x); }); saveResults();
-      fillSelects(); renderKey(); renderTplList();
-    } catch (e) { if (loud) alert('Could not fetch from the server: ' + e.message); }
+  function fillWsSel() {
+    const s = $('#wsSel'); if (!A || !A.user) { s.hidden = true; return; }
+    const gs = dir.groups.filter(g => isAdmin() || isMemberOf(g));
+    s.innerHTML = '<option value="' + esc(personalWid()) + '">👤 My workspace</option>' + gs.map(g => `<option value="g:${esc(g.gid)}">👥 ${esc(groupLabel(g))}</option>`).join('');
+    s.value = wsId; s.hidden = false;
   }
+  function loadWs(wid) {
+    wsId = wid; LS.set('omr_ws_' + A.user.id, wid); lastSig = '';
+    const c = LS.get(wsKey(wid), null) || {};
+    keys = c.keys || {}; results = c.results || []; WSS = normWss(c.settings); WLOGO = c.logo || ''; logoDraft = null; applyS();
+    keyState = { id: '', tplId: 'builtin', answers: {} }; sc = { sel: null }; submitted = false;
+    $('#keyName').value = ''; $('#scanArea').hidden = true; $('#resBox').hidden = true;
+    fillSelects(); renderKey(); updateTimerBtn(); fillWsForm(); renderResults();
+  }
+  $('#wsSel').onchange = async () => { const v = $('#wsSel').value; await flush(); loadWs(v); pullWs(true); };
+  let lastSig = '';
+  async function pullWs(loud) {
+    if (!A || !A.token || !wsId) return;
+    await flush();
+    if (outbox.length) { if (loud) toast('Waiting to upload your changes…'); return; }
+    const wid = wsId, r = await api('wsSync', { wid });
+    if (!r || !r.ok) { if (loud) toast(trErr(r && r.error)); return; }
+    if (wid !== wsId || outbox.length) return;
+    const nk = {}; r.keys.forEach(k => { nk[k.id] = k; });
+    const nset = normWss(r.settings), sig = JSON.stringify([nk, r.results, nset, r.logo]);
+    if (sig === lastSig) { if (loud) toast('Up to date.'); return; }
+    const setChanged = JSON.stringify(nset) !== JSON.stringify(WSS) || r.logo !== WLOGO;
+    lastSig = sig; keys = nk; results = r.results; WSS = nset; WLOGO = r.logo || ''; applyS(); saveWsCache();
+    if (keyState.id && !keys[keyState.id]) { keyState = { id: '', tplId: 'builtin', answers: {} }; $('#keyName').value = ''; }
+    fillSelects(); renderKey(); updateTimerBtn(); if (setChanged && !logoDraft && !$('#v-set').classList.contains('on')) fillWsForm();
+    if ($('#v-res').classList.contains('on')) renderResults();
+    if (submitted) refreshResult();
+  }
+  async function pullDir() {
+    if (!A || !A.token) return false;
+    const r = await api('bootstrap', {}); if (!r || !r.ok) return false;
+    dir = { users: r.users, groups: r.groups, requests: r.requests }; LS.set('omr_dir', dir);
+    A.user = r.user; LS.set('omr_auth', A);
+    const pend = new Set(outbox.filter(o => o.action === 'saveTemplate').map(o => o.payload.template.id));
+    const keep = customTpls.filter(t => pend.has(t.id) && !r.templates.some(s => s.id === t.id));
+    customTpls = r.templates.concat(keep); saveTpls();
+    renderUserBits(); fillWsSel(); fillSelects();
+    ['grp', 'prof', 'tpl'].forEach(v => { if ($('#v-' + v).classList.contains('on')) ({ grp: renderGroups, prof: renderProfile, tpl: renderTplList })[v](); });
+    return true;
+  }
+  function renderUserBits() {
+    const u = A && A.user; $('#userPill').textContent = u ? u.name : ''; $('#userPill').hidden = !u;
+    $('#navTpl').hidden = !canUp(); $('#navAdm').hidden = !isAdmin();
+    const n = u ? dir.requests.filter(q => q.to === u.id).length : 0;
+    $('#navGrp').innerHTML = 'Groups' + (n ? '<span class="badge">' + n + '</span>' : '');
+    const on = document.querySelector('nav button.on'); if (on && on.hidden) gotoTab('key');
+  }
+  function migrateLegacy() {
+    if (!canUp()) return;
+    const lk = LS.get('omr_keys', null), lr = LS.get('omr_results', null);
+    if (lk && Object.keys(lk).length && !Object.keys(keys).length && wsId === personalWid()) {
+      keys = lk; results = lr || []; saveWsCache();
+      Object.keys(keys).forEach(id => queue('saveKey', { wid: wsId, key: keys[id] }, 'key:' + id));
+      results.forEach(r => queue('saveResult', { wid: wsId, result: r }, 'res:' + r.id));
+      localStorage.removeItem('omr_keys'); localStorage.removeItem('omr_results');
+      toast('Your earlier answer keys and results were moved to your workspace.');
+    }
+    customTpls.forEach(t => { if (!t.by) queue('saveTemplate', { template: t }, 'tpl:' + t.id); });
+  }
+  async function startSession(defPw) {
+    $('#authOv').classList.remove('on');
+    wsId = ''; loadWs(LS.get('omr_ws_' + A.user.id, '') || personalWid());
+    renderUserBits(); migrateLegacy();
+    await pullDir();
+    if (wsId.indexOf('g:') === 0 && !dir.groups.some(g => 'g:' + g.gid === wsId)) loadWs(personalWid());
+    fillWsSel(); renderUserBits(); pullWs(false);
+    if (defPw) setTimeout(() => alert('You are using the default admin password. Please change it now: Profile → Change password.'), 300);
+  }
+
+  // ---------- Settings tab (rules + heading of the open workspace, and this phone) ----------
+  let logoDraft = null;
+  function fillWsForm() {
+    $('#sPer').value = WSS.per; $('#sNeg').value = WSS.neg; $('#sTim').value = WSS.timerPct; $('#sPass').value = WSS.passPct;
+    $('#hL1').value = WSS.header.l1; $('#hL2').value = WSS.header.l2; $('#hL3').value = WSS.header.l3; $('#hL4').value = WSS.header.l4;
+    showLogo();
+    $('#sThr').value = DEV.thr; $('#sFill').value = DEV.fillPct;
+    $('#wsNote').textContent = A && A.user ? 'These rules and the result sheet heading apply to: ' + wsLabel(wsId) + (wsId.indexOf('g:') === 0 ? ' (every member of the group can change them).' : '.') : '';
+  }
+  function showLogo() {
+    const lg = logoDraft != null ? logoDraft : WLOGO, p = $('#logoPrev');
+    p.hidden = !lg; if (lg) p.src = lg; $('#logoDel').hidden = !lg;
+  }
+  function resizeLogo(file) {
+    return new Promise((res, rej) => {
+      const u = URL.createObjectURL(file), im = new Image();
+      im.onload = () => {
+        URL.revokeObjectURL(u); let side = 240, out = '';
+        for (let t = 0; t < 6; t++) {
+          const k = Math.min(1, side / Math.max(im.naturalWidth, im.naturalHeight)), w = Math.max(1, Math.round(im.naturalWidth * k)), h = Math.max(1, Math.round(im.naturalHeight * k));
+          const cv = document.createElement('canvas'); cv.width = w; cv.height = h; const x = cv.getContext('2d'); x.fillStyle = '#fff'; x.fillRect(0, 0, w, h); x.drawImage(im, 0, 0, w, h);
+          out = cv.toDataURL('image/jpeg', 0.85); if (out.length < 44000) break; side = Math.round(side * 0.75);
+        }
+        res(out);
+      };
+      im.onerror = () => { URL.revokeObjectURL(u); rej(new Error('Could not open the image')); };
+      im.src = u;
+    });
+  }
+  $('#logoIn').onchange = async e => {
+    const f = e.target.files[0]; e.target.value = ''; if (!f) return;
+    try { logoDraft = await resizeLogo(f); showLogo(); $('#sMsg').className = 'msg'; $('#sMsg').textContent = 'Logo chosen — tap “Save for this workspace”.'; }
+    catch (err) { $('#sMsg').textContent = err.message; }
+  };
+  $('#logoDel').onclick = () => { logoDraft = ''; showLogo(); };
+  $('#sSave').onclick = async () => {
+    const m = $('#sMsg'); m.className = 'msg';
+    const per = parseFloat($('#sPer').value), neg = parseFloat($('#sNeg').value), tp = parseFloat($('#sTim').value), pp = parseFloat($('#sPass').value);
+    if ([per, neg, tp, pp].some(isNaN) || pp < 0 || pp > 100 || per < 0 || neg < 0 || tp < 0 || tp > 100) { m.textContent = 'Please enter valid values.'; return; }
+    WSS = normWss({ per, neg, timerPct: tp, passPct: pp, header: { l1: $('#hL1').value.trim(), l2: $('#hL2').value.trim(), l3: $('#hL3').value.trim(), l4: $('#hL4').value.trim() } });
+    if (logoDraft != null) WLOGO = logoDraft; logoDraft = null;
+    applyS(); saveWsCache(); updateTimerBtn(); refreshResult(); fillWsForm();
+    m.className = 'msg ok'; m.textContent = '✔ Saved on this phone — sharing…';
+    const r = await queue('saveWs', { wid: wsId, settings: WSS, logo: WLOGO }, 'ws:' + wsId);
+    if (r.ok) m.textContent = '✔ Saved' + (wsId.indexOf('g:') === 0 ? ' and shared with the group.' : '.');
+    else if (r.error === 'offline') m.textContent = '✔ Saved on this phone. It will be uploaded when the internet is back.';
+    else { m.className = 'msg'; m.textContent = 'Saved on this phone, but the server said: ' + r.error; }
+  };
+  $('#dSave').onclick = () => {
+    const m = $('#dMsg'), thr = parseFloat($('#sThr').value), fp = parseFloat($('#sFill').value);
+    if (isNaN(thr) || isNaN(fp) || thr < 0.03 || thr > 0.6 || fp < 30 || fp > 95) { m.className = 'msg'; m.textContent = 'Please enter valid values.'; return; }
+    DEV.thr = thr; DEV.fillPct = fp; applyS(); saveSettings(); refreshResult(); m.className = 'msg ok'; m.textContent = '✔ Saved on this phone.';
+  };
+
+  // ---------- Groups tab ----------
+  const act = async (action, payload, okMsg, msgEl) => {
+    const r = await api(action, payload);
+    if (msgEl) { msgEl.className = 'msg' + (r.ok ? ' ok' : ''); msgEl.textContent = r.ok ? okMsg : trErr(r.error); } else if (!r.ok) toast(trErr(r.error));
+    if (r.ok) await pullDir();
+    return r;
+  };
+  function userDatalist() {
+    let d = $('#dlUsers'); if (!d) { d = document.createElement('datalist'); d.id = 'dlUsers'; document.body.appendChild(d); }
+    d.innerHTML = dir.users.map(u => `<option value="${esc(u.id)}">${esc(u.name)}</option>`).join('');
+  }
+  function renderGroups() {
+    if (!A || !A.user) return; userDatalist();
+    const inc = dir.requests.filter(q => q.to === A.user.id);
+    $('#invIn').innerHTML = inc.length ? inc.map(q => `<div class="item"><div><b>${esc(q.glabel || 'A group')}${q.gname ? ' — ' + esc(q.gname) : ''}</b><small>${esc(q.fromName)} (${esc(q.from)}) invited you</small></div>
+      <div><button class="b sm" data-acc="${esc(q.rid)}">Accept</button> <button class="b red sm" data-dec="${esc(q.rid)}">Decline</button></div></div>`).join('') : '<p class="hint">No invitations.</p>';
+    $('#invIn').querySelectorAll('[data-acc]').forEach(b => b.onclick = async () => { await act('respond', { rid: b.dataset.acc, accept: true }); renderGroups(); });
+    $('#invIn').querySelectorAll('[data-dec]').forEach(b => b.onclick = async () => { await act('respond', { rid: b.dataset.dec, accept: false }); renderGroups(); });
+    const gs = myGroups(), L = $('#grpList');
+    L.innerHTML = gs.length ? gs.map(g => `<div class="card"><b>${esc(groupLabel(g))}</b>${'g:' + g.gid === wsId ? '<span class="chip g">open now</span>' : ''}
+      <div class="hint">Members</div>${g.members.map(m => `<div class="act">${esc(m.name)} • ${esc(m.id)}${m.role === 'owner' ? ' ★' : ''}</div>`).join('')}
+      ${dir.requests.filter(q => q.gid === g.gid).map(q => `<div class="act">⏳ Waiting: ${esc(q.toName)} (${esc(q.to)}), invited by ${esc(q.fromName)}</div>`).join('')}
+      <div class="sm2" style="margin-top:8px"><input list="dlUsers" placeholder="ID (mobile) of the user to invite" data-inv="${esc(g.gid)}"><button class="b sm" data-send="${esc(g.gid)}">Send request</button></div>
+      <button class="b alt sm" data-use="${esc(g.gid)}" style="margin-top:8px">Open this group</button>
+      <button class="b alt sm" data-ren="${esc(g.gid)}" style="margin-top:8px">Rename</button>
+      <button class="b red sm" data-leave="${esc(g.gid)}" style="margin-top:8px">Leave</button><div class="msg" data-gm="${esc(g.gid)}"></div></div>`).join('')
+      : '<div class="card"><p class="hint">You are not in any group yet. Create one above, or accept an invitation.</p></div>';
+    L.querySelectorAll('[data-send]').forEach(b => b.onclick = async () => {
+      const gid = b.dataset.send, inp = L.querySelector('[data-inv="' + gid + '"]'), msg = L.querySelector('[data-gm="' + gid + '"]');
+      if (!inp.value.trim()) { msg.className = 'msg'; msg.textContent = 'Type or pick the user ID first.'; return; }
+      const r = await act('invite', { gid, to: inp.value.trim() }); renderGroups();
+      const m2 = $('#grpList').querySelector('[data-gm="' + gid + '"]'); if (m2) { m2.className = 'msg' + (r.ok ? ' ok' : ''); m2.textContent = r.ok ? 'Request sent. The user must accept it.' : trErr(r.error); }
+    });
+    L.querySelectorAll('[data-use]').forEach(b => b.onclick = async () => { await flush(); loadWs('g:' + b.dataset.use); fillWsSel(); pullWs(true); gotoTab('key'); });
+    L.querySelectorAll('[data-ren]').forEach(b => b.onclick = async () => {
+      const g = gs.find(x => x.gid === b.dataset.ren), n = prompt('Group name', g.name); if (n === null) return;
+      await act('renameGroup', { gid: g.gid, name: n }); renderGroups();
+    });
+    L.querySelectorAll('[data-leave]').forEach(b => b.onclick = async () => {
+      if (!confirm('Leave this group? You will no longer see its answer keys and results.')) return;
+      const gid = b.dataset.leave; await flush();
+      const r = await act('leaveGroup', { gid }); if (r.ok) { if (wsId === 'g:' + gid) loadWs(personalWid()); fillWsSel(); renderGroups(); }
+    });
+  }
+  $('#gCreate').onclick = async () => {
+    const r = await act('createGroup', { name: $('#gName').value.trim() }, '✔ Group created. Invite members below.', $('#gMsg'));
+    if (r.ok) { $('#gName').value = ''; renderGroups(); }
+  };
+
+  // ---------- Profile tab ----------
+  function renderProfile() {
+    if (!A || !A.user) return; userDatalist();
+    const u = A.user; $('#pName').textContent = u.name; $('#pRole').textContent = u.role === 'admin' ? 'Admin' : (u.canUpload ? 'User • can upload sheets' : 'User');
+    $('#pRole').className = 'chip ' + (u.role === 'admin' ? 'a' : u.canUpload ? 'g' : ''); $('#pId').textContent = 'ID: ' + u.id;
+    const gs = dir.groups.filter(g => isAdmin() || isMemberOf(g)), cur = $('#invGroup').value;
+    $('#invGroup').innerHTML = gs.length ? gs.map(g => `<option value="${esc(g.gid)}">${esc(groupLabel(g))}</option>`).join('') : '<option value="">— you are not in a group —</option>';
+    if (cur && gs.some(g => g.gid === cur)) $('#invGroup').value = cur;
+    const q = $('#uSearch').value.trim().toLowerCase(), g = dir.groups.find(x => x.gid === $('#invGroup').value);
+    const L = dir.users.filter(x => !q || x.name.toLowerCase().indexOf(q) >= 0 || x.id.toLowerCase().indexOf(q) >= 0);
+    $('#uList').innerHTML = L.length ? L.map(x => {
+      const isMem = g && g.members.some(m => m.id === x.id), pend = g && dir.requests.some(r => r.gid === g.gid && r.to === x.id);
+      const inv = g && x.id !== u.id && !isMem ? (pend ? '<span class="hint">invited</span>' : `<button class="b sm" data-inv="${esc(x.id)}">Invite</button>`) : '';
+      const adm = isAdmin() && x.role !== 'admin' ? `<label class="hint" style="display:inline-block;margin:0 6px 0 0"><input type="checkbox" style="width:auto" data-up="${esc(x.id)}" ${x.canUpload ? 'checked' : ''}> can upload sheets</label><button class="b alt sm" data-rp="${esc(x.id)}">Reset password</button>` : '';
+      return `<div class="item"><div><b>${esc(x.name)}</b>${x.role === 'admin' ? '<span class="chip a">Admin</span>' : x.canUpload ? '<span class="chip g">uploader</span>' : ''}<small>ID ${esc(x.id)}</small></div><div style="text-align:right">${inv}${adm}</div></div>`;
+    }).join('') : '<p class="hint">No users found.</p>';
+    $('#uList').querySelectorAll('[data-inv]').forEach(b => b.onclick = async () => {
+      const r = await act('invite', { gid: $('#invGroup').value, to: b.dataset.inv }); if (r.ok) { toast('Request sent.'); renderProfile(); }
+    });
+    $('#uList').querySelectorAll('[data-up]').forEach(c => c.onchange = async () => { await act('setUpload', { id: c.dataset.up, value: c.checked }); renderProfile(); });
+    $('#uList').querySelectorAll('[data-rp]').forEach(b => b.onclick = async () => {
+      if (!confirm('Create a new password for this user?')) return;
+      const r = await api('resetPassword', { id: b.dataset.rp }); if (r.ok) alert('New password: ' + r.password + '\nGive it to the user. They can change it after logging in.'); else toast(trErr(r.error));
+    });
+  }
+  $('#uSearch').oninput = renderProfile; $('#invGroup').onchange = renderProfile;
+  $('#pwSave').onclick = async () => {
+    const m = $('#pwMsg'), o = $('#pwOld').value, n = $('#pwNew').value;
+    if (!o || n.length < 6) { m.className = 'msg'; m.textContent = 'Enter your current password and a new one (6+ characters).'; return; }
+    const r = await api('changePassword', { oldPassword: o, newPassword: n });
+    if (r.ok) { A.token = r.token; LS.set('omr_auth', A); $('#pwOld').value = ''; $('#pwNew').value = ''; m.className = 'msg ok'; m.textContent = '✔ Password changed.'; }
+    else { m.className = 'msg'; m.textContent = trErr(r.error); }
+  };
+
+  // ---------- Admin tab ----------
+  async function loadAdmin() {
+    if (!isAdmin()) return;
+    $('#admGroups').innerHTML = '<p class="hint">Loading…</p>';
+    const r = await api('overview', {}); if (!r.ok) { $('#admGroups').innerHTML = '<p class="msg">' + esc(trErr(r.error)) + '</p>'; return; }
+    const lab = {}; r.groups.forEach(g => { lab['g:' + g.gid] = groupLabel(g); });
+    $('#admGroups').innerHTML = r.groups.length ? r.groups.map(g => `<div class="item"><div><b>${esc(groupLabel(g))}</b><small>${g.members.map(m => esc(m.name)).join(', ')}<br>${g.keys} answer key(s) • ${g.results} result(s)${g.last ? ' • last activity ' + esc(new Date(g.last).toLocaleString()) : ''}</small></div>
+      <button class="b sm" data-open="${esc(g.gid)}">Open</button></div>`).join('') : '<p class="hint">No groups yet.</p>';
+    $('#admGroups').querySelectorAll('[data-open]').forEach(b => b.onclick = async () => { await flush(); loadWs('g:' + b.dataset.open); fillWsSel(); pullWs(true); gotoTab('res'); });
+    $('#admAct').innerHTML = r.activity.length ? r.activity.map(x => `<div class="act">${esc(new Date(x.t).toLocaleString())} • <b>${esc(x.name)}</b> ${esc(x.action)}${x.detail ? ' — ' + esc(x.detail) : ''}<br><span class="hint">${esc(lab[x.wid] || (x.wid ? 'personal workspace' : 'account'))}</span></div>`).join('') : '<p class="hint">Nothing yet.</p>';
+  }
+  $('#admRef').onclick = loadAdmin;
 
   // ---------- install (PWA) ----------
   let dip = null;
@@ -667,6 +971,9 @@
   if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => { });
 
   // ---------- start ----------
-  fillSettings(); fillSelects(); updateTimerBtn(); renderKey(); renderTplList(); pull(false);
+  applyS(); fillSelects(); updateTimerBtn(); renderKey(); renderTplList();
+  if (A && A.token && A.user) startSession(false); else showAuth('');
+  setInterval(() => { if (A && A.token && !document.hidden) { pullWs(false); if ((setInterval.n = (setInterval.n || 0) + 1) % 3 === 0) pullDir(); } }, 15000);
+  document.addEventListener('visibilitychange', () => { if (!document.hidden && A && A.token) { pullWs(false); pullDir(); } });
   window.__omr = { get state() { return { S, keys, results, sc, keyState, customTpls, wiz }; } }; // for debugging / tests
 })();
