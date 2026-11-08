@@ -49,32 +49,37 @@ canvas{display:block;width:100%;height:auto}
 .rk{display:inline-block;min-width:26px;text-align:center;background:#0f766e;color:#fff;border-radius:6px;padding:1px 6px;font-size:13px;margin-right:6px}
 .item.fail b,.item.fail small,.item.fail .rk{color:#dc2626}.item.fail .rk{background:#fee2e2}
 .grp{font-weight:700;margin:14px 0 2px;color:#0f766e}
-#printOv{display:none;position:fixed;inset:0;background:#fff;z-index:60;overflow:auto;color:#000}
-#printOv.on{display:block}
-#printOv .pbar{position:sticky;top:0;background:#f1f5f9;padding:8px;border-bottom:1px solid #cbd5e1}
-#printBody{padding:14px;max-width:900px;margin:auto}
-#printBody h2{margin:0 0 4px;font-size:20px}#printBody .sub{color:#475569;font-size:13px;margin-bottom:10px}
-#printBody table{width:100%;border-collapse:collapse;font-size:13px}
-#printBody th,#printBody td{border:1px solid #94a3b8;padding:5px 6px;text-align:left}
-#printBody th{background:#e2e8f0}#printBody td.n,#printBody th.n{text-align:right}
-#printBody tr.fail td,#printBody .fail{color:#dc2626;font-weight:600}
-#printBody thead{display:table-header-group}#printBody tr{page-break-inside:avoid}
-#printBody .page{page-break-after:always;margin-bottom:24px}#printBody .page:last-child{page-break-after:auto}
-#printBody .kv{display:grid;grid-template-columns:190px 1fr;gap:3px 10px;font-size:15px;margin:10px 0}
-#printBody .score{font-size:26px;font-weight:800}
-#printBody .ans{columns:4;column-gap:12px;font-size:12px}#printBody .ans div{break-inside:avoid;padding:1px 0}
-#printBody .wrong{color:#dc2626}
-@page{margin:12mm}
-@media print{body{background:#fff}body>*:not(#printOv){display:none!important}#printOv{display:block!important;position:static;overflow:visible}#printOv .pbar{display:none}#printBody{padding:0;max-width:none}}
+#authOv{position:fixed;inset:0;background:#0f766e;z-index:80;overflow:auto;padding:16px;display:none}
+#authOv.on{display:block}
+#authOv .box{background:#fff;border-radius:14px;max-width:420px;margin:24px auto;padding:16px}
+#authOv h2{margin:0 0 4px;color:#0f766e}
+.tabs{display:flex;gap:6px;margin:10px 0}.tabs button{flex:1;padding:9px;border:1px solid #cbd5e1;background:#fff;border-radius:8px;font:inherit}
+.tabs button.on{background:#0f766e;color:#fff;border-color:#0f766e}
+.cred{background:#ecfdf5;border:1px solid #6ee7b7;border-radius:10px;padding:10px;margin-top:10px;font-size:15px}
+.cred b{font-size:18px;letter-spacing:.5px}
+header .hr{display:flex;gap:8px;align-items:center}
+header select{width:auto;max-width:46vw;padding:6px;font-size:13px}
+#userPill{font-size:13px;background:#ffffff33;border-radius:99px;padding:4px 10px;white-space:nowrap}
+.chip{display:inline-block;font-size:11px;border-radius:99px;padding:1px 8px;background:#e2e8f0;color:#334155;margin-left:6px}
+.chip.g{background:#d1fae5;color:#065f46}.chip.a{background:#fde68a;color:#92400e}
+.badge{background:#dc2626;color:#fff;border-radius:99px;font-size:11px;padding:0 6px;margin-left:4px}
+.sm2{display:flex;gap:6px;align-items:center;flex-wrap:wrap}
+.sm2 input,.sm2 select{flex:1;min-width:120px}
+.logoPrev{max-width:90px;max-height:90px;border:1px solid #cbd5e1;border-radius:8px;display:block;margin:6px 0}
+.act{font-size:12px;border-bottom:1px solid #e2e8f0;padding:5px 0;color:#334155}
+.act b{color:#0f766e}
 </style>
 </head>
 <body>
-<header><h1>OMR Scanner</h1><button id="installBtn" class="b" hidden>⬇ Install</button></header>
+<header><h1>OMR Scanner</h1><div class="hr"><select id="wsSel" title="Workspace"></select><span id="userPill"></span><button id="installBtn" class="b" hidden>⬇ Install</button></div></header>
 <nav>
   <button data-v="key" class="on">Answer Key</button>
   <button data-v="scan">Scan</button>
   <button data-v="res">Results</button>
-  <button data-v="tpl">Sheets</button>
+  <button data-v="tpl" id="navTpl" hidden>Sheets</button>
+  <button data-v="grp" id="navGrp">Groups</button>
+  <button data-v="prof">Profile</button>
+  <button data-v="adm" id="navAdm" hidden>Admin</button>
   <button data-v="set">Settings</button>
 </nav>
 <main>
@@ -145,7 +150,7 @@ canvas{display:block;width:100%;height:auto}
       <div style="text-align:center;margin:12px 0 4px">Score<div class="big" id="rF"></div></div>
       <div class="hint" id="rS" style="text-align:center"></div>
       <button class="b" id="nextBtn">➕ Next student</button>
-      <button class="b alt" id="stuPdf">📄 This student's PDF</button>
+      <button class="b alt" id="stuPdf">⬇ This student's PDF</button>
     </div>
   </div>
 </section>
@@ -155,15 +160,16 @@ canvas{display:block;width:100%;height:auto}
   <div class="card">
     <label>Answer key</label>
     <select id="resKey"></select>
-    <button class="b" id="pdfAll">📄 Merit list PDF (all students)</button>
-    <button class="b alt" id="pdfEach">📄 All students — one page each</button>
-    <button class="b alt" id="resCsv">⬇ Download CSV</button>
-    <button class="b alt" id="resSync">🔄 Refresh from server</button>
-    <p class="hint">Ranked by marks, highest first. Students below the pass mark (Settings, default 40%) are shown in red. PDF opens a print screen: choose “Save as PDF”.</p>
+    <button class="b" id="pdfAll">⬇ Merit list (PDF)</button>
+    <button class="b alt" id="pdfEach">⬇ All students — one page each (PDF)</button>
+    <button class="b alt" id="resCsv">⬇ CSV</button>
+    <button class="b alt" id="resSync">🔄 Refresh</button>
+    <div id="pdfMsg" class="msg"></div>
+    <p class="hint">Ranked by marks, highest first. Top 3 in green, students below the pass mark in red. The PDF file is downloaded to your phone. Heading and logo: Settings tab.</p>
     <div id="resList"></div>
   </div>
 </section>
-<div id="printOv"><div class="pbar"><button class="b" id="prPrint">🖨 Print / Save as PDF</button><button class="b alt" id="prClose">✕ Close</button></div><div id="printBody"></div></div>
+
 
 <!-- SHEETS / TEMPLATES -->
 <section id="v-tpl">
@@ -217,23 +223,81 @@ canvas{display:block;width:100%;height:auto}
 <!-- SETTINGS -->
 <section id="v-set">
   <div class="card">
-    <p class="hint">An admin PIN is required to change settings. (Initial PIN: 1234 — change it first.)</p>
-    <label>Admin PIN</label><input id="sPin" type="password" inputmode="numeric">
+    <b>Marking rules &amp; result sheet</b>
+    <p class="hint" id="wsNote"></p>
     <label>Marks per correct answer</label><input id="sPer" type="number" step="0.01">
     <label>Penalty per wrong answer</label><input id="sNeg" type="number" step="0.01">
     <label>Second Timer penalty (% of total marks)</label><input id="sTim" type="number" step="0.1">
+    <label>Pass mark % (students below this are shown in red)</label><input id="sPass" type="number" step="1">
+    <label>Result sheet heading — line 1 (e.g. institute name)</label><input id="hL1" placeholder="e.g. AUTHENTIC University &amp; Nursing Admission Coaching">
+    <label>Line 2 (e.g. Session)</label><input id="hL2" placeholder="e.g. Session: 2026 - 27">
+    <label>Line 3 (exam title — leave empty to use the answer key name)</label><input id="hL3" placeholder="e.g. Analytical Ability Model Test - 02">
+    <label>Line 4</label><input id="hL4" placeholder="Result Sheet">
+    <label>Logo (shown at the left of the heading)</label>
+    <img id="logoPrev" class="logoPrev" alt="" hidden>
+    <input type="file" id="logoIn" accept="image/*">
+    <button class="b alt sm" id="logoDel" hidden>Remove logo</button>
+    <button class="b" id="sSave">💾 Save for this workspace</button>
+    <div id="sMsg" class="msg"></div>
+  </div>
+  <div class="card">
+    <b>This phone</b>
     <label>Mark detection threshold (0.05–0.5; lower detects fainter marks)</label><input id="sThr" type="number" step="0.01">
     <label>Minimum fill % for a valid answer (30–95; a bubble filled less than this counts as partial = wrong)</label><input id="sFill" type="number" step="1">
-    <label>Pass mark % (students below this are shown in red)</label><input id="sPass" type="number" step="1">
-    <label>Apps Script Web App URL (optional — cloud sync)</label><input id="sUrl" placeholder="https://script.google.com/macros/s/.../exec">
-    <label>New PIN (leave empty to keep)</label><input id="sNewPin" type="password" inputmode="numeric">
-    <button class="b" id="sSave">💾 Save</button>
-    <div id="sMsg" class="msg"></div>
+    <button class="b alt" id="dSave">💾 Save</button>
+    <div id="dMsg" class="msg"></div>
   </div>
   <div class="card">
     <b>Install the app</b>
     <p class="hint">Android / Chrome: use the “Install” button at the top, or the browser menu → “Install app / Add to Home screen”.</p>
     <p class="hint" id="iosHint" hidden>iPhone: in Safari tap Share → “Add to Home Screen”.</p>
+  </div>
+</section>
+
+<!-- GROUPS -->
+<section id="v-grp">
+  <div class="card">
+    <b>Invitations for you</b>
+    <div id="invIn"></div>
+  </div>
+  <div class="card">
+    <b>Create a group</b>
+    <p class="hint">A group shares answer keys and scanned results between its members. A user can be in several groups. Members of one group cannot see another group's data.</p>
+    <div class="sm2"><input id="gName" placeholder="Group name (optional)"><button class="b" id="gCreate">＋ Create</button></div>
+    <div id="gMsg" class="msg"></div>
+  </div>
+  <div id="grpList"></div>
+</section>
+
+<!-- PROFILE -->
+<section id="v-prof">
+  <div class="card">
+    <b id="pName"></b><span class="chip" id="pRole"></span>
+    <div class="hint" id="pId"></div>
+    <label>Change password</label>
+    <input id="pwOld" type="password" placeholder="Current password" autocomplete="current-password">
+    <input id="pwNew" type="password" placeholder="New password (6+ characters)" style="margin-top:6px" autocomplete="new-password">
+    <button class="b" id="pwSave">Change password</button>
+    <button class="b red" id="logoutBtn">Log out</button>
+    <div id="pwMsg" class="msg"></div>
+  </div>
+  <div class="card">
+    <b>All users</b>
+    <input id="uSearch" placeholder="Search name or ID" style="margin-top:6px">
+    <label>Invite to group</label><select id="invGroup"></select>
+    <div id="uList"></div>
+  </div>
+</section>
+
+<!-- ADMIN -->
+<section id="v-adm">
+  <div class="card">
+    <b>All groups</b> <button class="b alt sm" id="admRef">🔄 Refresh</button>
+    <div id="admGroups"></div>
+  </div>
+  <div class="card">
+    <b>Recent activity</b>
+    <div id="admAct"></div>
   </div>
 </section>
 
@@ -250,6 +314,28 @@ canvas{display:block;width:100%;height:auto}
   </div>
 </div></div>
 
+<div id="authOv">
+  <div class="box">
+    <h2>OMR Scanner</h2>
+    <div class="hint">Log in to continue.</div>
+    <div class="tabs"><button id="aTabIn" class="on">Log in</button><button id="aTabUp">New user</button></div>
+    <div id="aIn">
+      <label>ID (mobile number)</label><input id="aId" inputmode="text" autocomplete="username">
+      <label>Password</label><input id="aPw" type="password" autocomplete="current-password">
+      <button class="b" id="aLogin">Log in</button>
+    </div>
+    <div id="aUp" hidden>
+      <label>Your name</label><input id="aName" autocomplete="name">
+      <label>Mobile number (this will be your ID)</label><input id="aMob" inputmode="tel" autocomplete="tel">
+      <button class="b" id="aReg">Get my ID &amp; password</button>
+      <div id="aCred" class="cred" hidden></div>
+    </div>
+    <details style="margin-top:12px"><summary class="hint">Server address</summary>
+      <input id="aUrl" placeholder="https://script.google.com/macros/s/.../exec">
+    </details>
+    <div id="aMsg" class="msg"></div>
+  </div>
+</div>
 <script src="omr-core.js"></script>
 <script src="app.js"></script>
 </body>
