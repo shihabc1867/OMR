@@ -369,21 +369,108 @@
 
   // ---------- Scan ----------
   // opts: {pts (manual 4 corners in sheet order TL,TR,BR,BL), rot}
+  // Older hand-aligned sheet types have no stored corner-square positions. Here we find the 4 squares in the photo, straighten the
+  // photo roughly on them, detect the bubbles, and work out (by voting on scale + shift) how the template's bubbles map onto the
+  // detected ones. That tells us where the squares sit in template coordinates.
+  function inferMk(gray, w, h, tpl) {
+    const m = findMarkers(gray, w, h);
+    if (!m) return null;
+    const W = tpl.W, H = tpl.H, P = [];
+    tpl.groups.forEach(g => g.pts.forEach(p => P.push(p)));
+    const mkRough = [[-0.04 * W, -0.04 * H], [1.04 * W, -0.04 * H], [1.04 * W, 1.04 * H], [-0.04 * W, 1.04 * H]];
+    const phLand = dist(m[0], m[1]) > dist(m[1], m[2]), tLand = W > H, base = phLand !== tLand ? 1 : 0;
+    let best = null;
+    for (const r of [base, (base + 2) % 4]) {
+      const qq = [0, 1, 2, 3].map(i => m[(i + r) % 4]), Hr = homography(mkRough, qq);
+      if (!Hr) continue;
+      const gR = warpGray(gray, w, h, Hr, W, H);
+      let det = null; for (const sv of [0.85, 0.95, 0.75]) { det = detectBubbles(gR, W, H, sv); if (det && det.list.length >= 0.3 * P.length) break; }
+      if (!det || det.list.length < 0.3 * P.length) continue;
+      const D = det.list.map(b => [b.x, b.y]);
+      // vote for (scale x, scale y, shift x, shift y):  detected = S * template + t
+      const BIN = 5, R = 320, NB = Math.floor(2 * R / BIN) + 1, hist = new Int32Array(NB * NB);
+      let bv = 0, bsx = 1, bsy = 1, btx = 0, bty = 0;
+      // The squares lie just outside the bubble block on every side (margin between -1% and 14% of the sheet size): this rules out
+      // answers that are off by a whole column/row block (the blocks look identical)
+      let bx0 = 1e9, bx1 = -1e9, by0 = 1e9, by1 = -1e9;
+      P.forEach(p => { if (p[0] < bx0) bx0 = p[0]; if (p[0] > bx1) bx1 = p[0]; if (p[1] < by0) by0 = p[1]; if (p[1] > by1) by1 = p[1]; });
+      for (let sx = 0.8; sx <= 1.32; sx += 0.04) for (let sy = 0.8; sy <= 1.32; sy += 0.04) {
+        hist.fill(0);
+        const txLo = Math.max(mkRough[0][0] - sx * (bx0 + 0.01 * W), mkRough[1][0] - sx * (bx1 + 0.14 * W)), txHi = Math.min(mkRough[0][0] - sx * (bx0 - 0.14 * W), mkRough[1][0] - sx * (bx1 - 0.01 * W));
+        const tyLo = Math.max(mkRough[0][1] - sy * (by0 + 0.01 * H), mkRough[2][1] - sy * (by1 + 0.14 * H)), tyHi = Math.min(mkRough[0][1] - sy * (by0 - 0.14 * H), mkRough[2][1] - sy * (by1 - 0.01 * H));
+        if (txLo > txHi || tyLo > tyHi) continue;
+        for (let i = 0; i < D.length; i++) for (let j = 0; j < P.length; j++) {
+          const tx = D[i][0] - sx * P[j][0], ty = D[i][1] - sy * P[j][1];
+          if (tx < txLo || tx > txHi || ty < tyLo || ty > tyHi || tx < -R || tx > R || ty < -R || ty > R) continue;
+          const k = Math.floor((ty + R) / BIN) * NB + Math.floor((tx + R) / BIN); hist[k]++;
+        }
+        for (let k = 0; k < hist.length; k++) if (hist[k] > bv) { bv = hist[k]; bsx = sx; bsy = sy; btx = (k % NB) * BIN - R + BIN / 2; bty = Math.floor(k / NB) * BIN - R + BIN / 2; }
+      }
+      // refine: match nearest points, least squares per axis, tighter each round
+      let sx = bsx, sy = bsy, tx = btx, ty = bty, cnt = 0;
+      for (const gate of [9, 7, 5, 4]) {
+        const ax = [], ay = [];
+        for (let j = 0; j < P.length; j++) {
+          const ex = sx * P[j][0] + tx, ey = sy * P[j][1] + ty; let bd = gate * gate + 1, bi = -1;
+          for (let i = 0; i < D.length; i++) { const d2 = (D[i][0] - ex) * (D[i][0] - ex) + (D[i][1] - ey) * (D[i][1] - ey); if (d2 < bd) { bd = d2; bi = i; } }
+          if (bi >= 0) { ax.push([P[j][0], D[bi][0]]); ay.push([P[j][1], D[bi][1]]); }
+        }
+        cnt = ax.length; if (cnt < 8) break;
+        const fit1 = pr => { let n = pr.length, sp = 0, sd = 0, spp = 0, spd = 0; pr.forEach(v => { sp += v[0]; sd += v[1]; spp += v[0] * v[0]; spd += v[0] * v[1]; }); const den = n * spp - sp * sp; if (Math.abs(den) < 1e-9) return null; const a = (n * spd - sp * sd) / den; return [a, (sd - a * sp) / n]; };
+        const fx = fit1(ax), fy = fit1(ay); if (!fx || !fy) break;
+        sx = fx[0]; tx = fx[1]; sy = fy[0]; ty = fy[1];
+      }
+      if (cnt < 0.4 * P.length || sx < 0.6 || sy < 0.6) continue;
+      // Rows (and options) repeat, so the vote can be off by whole rows/options. Try small whole-pitch shifts and keep the best fit.
+      const firsts = tpl.groups.map(g => g.pts[0][1]).sort((p, q) => p - q), dys = [];
+      for (let i = 1; i < firsts.length; i++) { const d = firsts[i] - firsts[i - 1]; if (d > 2) dys.push(d); }
+      const pitchY = dys.length ? dys.slice().sort((p, q) => p - q)[Math.floor(dys.length / 4)] : 0;
+      const dxs = tpl.groups.filter(g => g.pts.length > 1).map(g => g.pts[1][0] - g.pts[0][0]).sort((p, q) => p - q), pitchX = dxs.length ? dxs[Math.floor(dxs.length / 2)] : 0;
+      const evalAt = (txv, tyv) => {
+        const mk = mkRough.map(p => [(p[0] - txv) / sx, (p[1] - tyv) / sy]), Hm = homography(mk, qq);
+        return Hm ? { mk, f: fitScore(warpGray(gray, w, h, Hm, W, H), W, H, tpl) } : { mk, f: -1 };
+      };
+      let cur = evalAt(tx, ty), cty = ty, ctx = tx;
+      if (pitchY > 4) {
+        // Printed sheets have about the same margin above the first row and below the last row: pick the whole-row shift that makes them equal
+        let by0 = 1e9, by1 = -1e9; P.forEach(p => { if (p[1] < by0) by0 = p[1]; if (p[1] > by1) by1 = p[1]; });
+        let bk = 0, bd = 1e18;
+        for (let k = -4; k <= 4; k++) {
+          const mkY = mkRough.map(p => (p[1] - (ty + k * pitchY * sy)) / sy), top = by0 - (mkY[0] + mkY[1]) / 2, bot = (mkY[2] + mkY[3]) / 2 - by1;
+          const d = Math.abs(top - bot) + (top < 0 || bot < 0 ? 1e6 : 0); if (d < bd) { bd = d; bk = k; }
+        }
+        cty = ty + bk * pitchY * sy; cur = evalAt(tx, cty);
+      }
+      if (pitchX > 4) { for (let k = -2; k <= 2; k++) { if (!k) continue; const e = evalAt(tx + k * pitchX * sx, cty); if (e.f > cur.f + 0.004) { cur = e; } } }
+      // final polish: small shifts (rough-image pixels) that improve how well the bubbles line up
+      { let ex = tx, ey = cty;
+        for (const step of [6, 3, 1.5]) for (let it = 0; it < 4; it++) {
+          let moved = false;
+          for (const [dx, dy] of [[step, 0], [-step, 0], [0, step], [0, -step]]) { const e = evalAt(ex + dx, ey + dy); if (e.f > cur.f + 0.002) { cur = e; ex += dx; ey += dy; moved = true; } }
+          if (!moved) break;
+        } }
+      if (!best || cur.f > best.f + 0.02) best = { mk: cur.mk, f: cur.f };   // the first orientation (upright) wins unless the other is clearly better
+    }
+    return best && best.f >= 0.2 ? best : null;
+  }
   function scanTpl(rgba, w, h, tpl, opts) {
     opts = opts || {};
     const gray = toGray(rgba, w, h);
-    let q, Hm, g, how = 'manual', rot = 0, fit = null, ambiguous = false;
+    let q, Hm, g, how = 'manual', rot = 0, fit = null, ambiguous = false, learned = null;
     if (opts.pts) {
       q = opts.pts; Hm = homography(tpl.ref, q);
       if (!Hm) return { found: false };
       g = warpGray(gray, w, h, Hm, tpl.W, tpl.H); fit = fitScore(g, tpl.W, tpl.H, tpl);
     } else {
-      // Reference points in template space: the corner squares (tpl.mk, saved when the sheet type was created) or the template corners
+      // Reference points in template space: the corner squares (tpl.mk, saved with the sheet type) or the template corners
+      let mode = tpl.align;
+      if (mode === 'manual' && !tpl.mk) {                        // old hand-placed template: try to work out where the squares are
+        const inf = inferMk(gray, w, h, tpl);
+        if (inf) { tpl.mk = inf.mk; learned = inf.mk; mode = 'markers'; } else mode = 'none';
+      }
       const mref = tpl.mk || tpl.ref;
       const ra = dist(mref[0], mref[1]) + dist(mref[3], mref[2]), rb = dist(mref[1], mref[2]) + dist(mref[0], mref[3]);
-      let mode = tpl.align;
-      if (mode === 'manual' && !tpl.mk) mode = 'none';          // old hand-placed template: only manual corners are known
-      let a = alignPhoto(gray, w, h, mode === 'none' ? 'x' : mode, Math.max(ra, rb) / Math.min(ra, rb));
+      const a = alignPhoto(gray, w, h, mode === 'none' ? 'x' : mode, Math.max(ra, rb) / Math.min(ra, rb));
       if (!a) return { found: false };
       how = a.how;
       var refUse = (a.how === 'markers') ? mref : tpl.ref;
@@ -404,7 +491,7 @@
     }
     const warped = warpRGBA(rgba, w, h, Hm, tpl.W, tpl.H);
     const sm = sampleBubbles(g, tpl.W, tpl.H, tpl);
-    return { found: true, how, rot, fit, ambiguous, quad: q, warped, dark: sm.dark, fill: sm.fill, raw: sm.raw };
+    return { found: true, how, rot, fit, ambiguous, quad: q, warped, dark: sm.dark, fill: sm.fill, raw: sm.raw, learned };
   }
 
   // ---------- Building a template from a photo of a blank sheet ----------

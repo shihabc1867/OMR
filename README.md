@@ -3,7 +3,7 @@
 Grade **any** OMR answer sheet with a phone camera. Take a photo of a blank copy of your sheet once and the app learns the layout (bubbles, questions, options). Then set an answer key, photograph students' sheets, fix any missed bubble by tapping, and submit to get correct / wrong / score.
 
 ## Features
-- **Any OMR sheet**: add a sheet type by photographing a blank sheet. Any number of questions, columns, or options (2-10), options running across or down, any numbering order (down columns, across rows, or by blocks). A built-in 100-question sheet (4 options) is included and can be printed.
+- **Any OMR sheet**: add a sheet type by photographing a blank sheet. Any number of questions, columns, or options (2-10), options running across or down, any numbering order (down columns, across rows, or by blocks). A built-in 100-question sheet (landscape, 4 columns × 25 rows, options a b c d, 4 black corner squares) is included and can be printed on A4 landscape.
 - Answer key: choose the sheet type, tap the correct option for as many questions as you want, give it a name, save. Keep many keys.
 - Scan: photo → corners found automatically (black corner squares, or the paper edges) → image straightened → every bubble measured → a light blue circle appears on every marked option.
 - Fix by hand: tap a missed bubble to add it (it becomes a circle too), tap again to remove it. Drag the corner handles if the automatic corners are off; "Rotate" if the sheet is upside down or sideways.
@@ -61,7 +61,7 @@ Score = `correct × marks − wrong × penalty − (Second Timer on ? total × %
 3. **Orientation**: the app tries the plausible rotations and keeps the one where the printed bubble outlines line up with the template.
 4. **Measure**: for each bubble, darkness = 1 − inside brightness / surrounding paper brightness (robust to shadows), minus the sheet-wide median (ignores printed letters in the bubbles).
 5. **Decide**: darkness above the threshold = marked; two or more strong marks on a question = multiple marks.
-6. **Learning a sheet**: on the straightened blank sheet it finds hollow closed rings of the dominant size, rejects printed text, groups them into rows, splits rows into questions by gap size, and numbers them by the chosen order.
+6. **Learning a sheet**: on the straightened blank sheet it finds the bright inside (hole) of every bubble outline, so bubbles that almost touch each other are still separated; printed letters and numbers are rejected by size and shape. The bubbles are then grouped into rows, split into questions by gap size, and numbered by the chosen order.
 
 Tested automatically: the engine reads 60-, 50-, 40- and 100-question synthetic sheets with 4 or 5 options, options across or down, and column, row or block numbering, from tilted photos with shadows and noise, with 0 errors; and the full app flow in headless Chrome with the built-in sheet and with a learned custom sheet. It has **not** been tested on real printed sheets with your phone, so run 20-30 real sheets first and tune the threshold.
 
@@ -77,3 +77,17 @@ Tested automatically: the engine reads 60-, 50-, 40- and 100-question synthetic 
 3. Roll / set-code bubble grids, per-question marks, several correct answers per question.
 4. Batch scanning, merit lists, statistics, PDF reports.
 5. Server-side PIN hashing and per-user accounts.
+
+
+## Strict marking rules (v4)
+- A question with **two or more marked bubbles** counts as wrong.
+- A bubble that is only **partly filled** (half shaded, tick, dot, faint wash) counts as wrong. Settings → "Minimum fill %" (default 70) controls how much of the bubble must be covered.
+- Such questions are shown in orange after scanning; tapping a bubble by hand clears the flag for that question.
+
+## Corner squares
+The finder removes thin lines (page borders, text) before looking for solid squares, checks that each square has plain paper around it, tries several thresholds, and uses the template's width/height ratio to pick the right four. Works when the whole sheet is photographed with background around it.
+
+## Corner squares and custom sheet types (v5)
+- When a sheet type is created, the positions of the black corner squares are saved with it (`mk`), even if the four handles were placed somewhere else (e.g. on the bubble area).
+- Scanning then lines the photo up on the squares automatically. Squares are told apart from filled answer bubbles by their corners.
+- Older sheet types saved without this: do one manual alignment (Adjust corners → Done); the app learns the squares and later scans are automatic. Or re-create the sheet type.

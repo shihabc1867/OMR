@@ -1,1253 +1,979 @@
-'use strict';
-/* =====================================================================
-   Vided — Phase 2
-   Multi-clip timeline, transitions, keyframe animation, motion-graphics
-   text templates, multi-track audio, undo/redo, real-time export.
-   Everything runs in the browser; nothing is uploaded anywhere.
-   ===================================================================== */
-
-/* ---------- helpers ---------- */
-const $ = id => document.getElementById(id);
-const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
-const ease = p => p * p * (3 - 2 * p);
-const easeOutBack = x => { const c1 = 1.70158, c3 = c1 + 1; return 1 + c3 * Math.pow(x - 1, 3) + c1 * Math.pow(x - 1, 2); };
-const fmt = s => { s = Math.max(0, s); const m = Math.floor(s / 60); return m + ':' + (s - m * 60).toFixed(1).padStart(4, '0'); };
-const sleep = ms => new Promise(r => setTimeout(r, ms));
-let uid = 1;
-const nid = () => uid++;
-const FONT = 'Inter, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif';
-
-function toast(msg) {
-  const t = $('toast');
-  t.textContent = msg;
-  t.classList.add('on');
-  clearTimeout(toast._t);
-  toast._t = setTimeout(() => t.classList.remove('on'), 2600);
-}
-
-function markDirty() { if (typeof storeDirty === 'function') storeDirty(); }
-
-/* ---------- state ---------- */
-const defCapStyle = () => ({ size: 46, color: '#ffffff', bgOn: true, bg: '#000000', y: 0.8, upper: false, anim: 'pop', bold: true });
-const defBg = () => ({ on: false, type: 'chroma', key: '#00ff00', sim: 35, soft: 12, spill: 50, edge: 30, shift: 0, invert: false, fill: 'none', color: '#101820', blur: 20, img: '' });
-const S = {
-  clips: [], texts: [], audio: [], caps: [], capStyle: defCapStyle(),
-  sel: -1, tsel: -1, asel: -1, capSel: -1, pick: false, noCut: false,
-  t: 0, total: 0,
-  playing: false, exporting: false, fast: false,
-  bg: '#000000', letterbox: false, vignette: false,
-  ratio: '9:16', prev: 540
-};
-const cv = $('cv'), ctx = cv.getContext('2d');
-const stage = $('stage');
-
-const PRESETS = {
-  '': '',
-  bw: 'grayscale(1)',
-  noir: 'grayscale(1) contrast(1.4) brightness(.9)',
-  sepia: 'sepia(.9)',
-  vintage: 'sepia(.5) contrast(.9) brightness(1.1) saturate(.8)',
-  warm: 'sepia(.35) saturate(1.4) hue-rotate(-10deg)',
-  cool: 'hue-rotate(15deg) saturate(1.2) brightness(1.05)',
-  vivid: 'contrast(1.2) saturate(1.6)'
-};
-const defFilter = () => ({ preset: '', b: 100, c: 100, s: 100, h: 0, bl: 0 });
-
-const selClip = () => S.clips.find(c => c.id === S.sel) || null;
-const selText = () => S.texts.find(t => t.id === S.tsel) || null;
-const selAudio = () => S.audio.find(a => a.id === S.asel) || null;
-const len = c => (c.out - c.in) / c.speed;
-const alen = a => a.out - a.in;
-const fadeF = (fi, fo, lt, L) => Math.min(fi > 0 ? clamp(lt / fi, 0, 1) : 1, fo > 0 ? clamp((L - lt) / fo, 0, 1) : 1);
-
-/* ---------- slider fields (built from data-* attributes) ---------- */
-document.querySelectorAll('.field').forEach(f => {
-  const d = f.dataset;
-  f.innerHTML = `<label><span>${d.label}</span><b id="v-${d.id}"></b></label>` +
-    `<input type="range" id="${d.id}" min="${d.min}" max="${d.max}" step="${d.step}" value="${d.val}">`;
-  const inp = f.querySelector('input');
-  inp.dataset.unit = d.unit;
-  inp.addEventListener('input', () => showVal(inp));
-  showVal(inp);
-});
-function showVal(inp) {
-  const step = +inp.step;
-  const v = +inp.value;
-  const txt = step >= 1 ? Math.round(v) : v.toFixed(step < 0.1 ? 2 : 1);
-  $('v-' + inp.id).textContent = txt + (inp.dataset.unit || '');
-}
-function setR(id, val, min, max) {
-  const el = $(id);
-  if (min !== undefined) el.min = min;
-  if (max !== undefined) el.max = max;
-  el.value = val;
-  showVal(el);
-}
-
-/* ---------- undo / redo ---------- */
-const U = [], R = [];
-let lastKey = '', lastTouch = 0;
-function cloneClip(c) { return { ...c, tr: { ...c.tr }, f: { ...c.f }, bg: { ...c.bg }, kf: c.kf.map(k => ({ ...k })) }; }
-function snap() {
-  return {
-    clips: S.clips.map(cloneClip),
-    texts: S.texts.map(t => ({ ...t })),
-    audio: S.audio.map(a => ({ ...a })),
-    caps: S.caps.map(c => ({ ...c })), capStyle: { ...S.capStyle },
-    sel: S.sel, tsel: S.tsel, asel: S.asel
+/* app.js - OMR Scanner: UI, templates (any sheet), answer keys, scoring, Apps Script sync */
+(function () {
+  'use strict';
+  const C = OMR.C;
+  const $ = s => document.querySelector(s);
+  const FONT = 'system-ui,-apple-system,"Segoe UI",Roboto,sans-serif';
+  const fmt = x => String(Math.round(x * 100) / 100);
+  const esc = s => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  const LS = {
+    get(k, d) { try { const v = localStorage.getItem(k); return v ? JSON.parse(v) : d; } catch (e) { return d; } },
+    set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); return true; } catch (e) { return false; } }
   };
-}
-function restore(s) {
-  pauseAllMedia();
-  S.clips = s.clips.map(cloneClip);
-  S.texts = s.texts.map(t => ({ ...t }));
-  S.audio = s.audio.map(a => ({ ...a }));
-  S.caps = s.caps.map(c => ({ ...c })); S.capStyle = { ...s.capStyle };
-  S.sel = s.sel; S.tsel = s.tsel; S.asel = s.asel;
-  compute();
-  S.t = clamp(S.t, 0, S.total);
-  refreshAll();
-  markDirty();
-}
-// Call BEFORE a change. Same key within 0.9s = one undo step (slider drags).
-function touch(key) {
-  const now = Date.now();
-  if (key === lastKey && now - lastTouch < 900) { lastTouch = now; return; }
-  lastKey = key; lastTouch = now;
-  U.push(snap());
-  if (U.length > 40) U.shift();
-  R.length = 0;
-  updUR();
-  markDirty();
-}
-function undo() {
-  if (!U.length || S.exporting) return;
-  R.push(snap());
-  restore(U.pop());
-  lastKey = '';
-  updUR();
-}
-function redo() {
-  if (!R.length || S.exporting) return;
-  U.push(snap());
-  restore(R.pop());
-  lastKey = '';
-  updUR();
-}
-function updUR() { $('undo').disabled = !U.length; $('redo').disabled = !R.length; }
 
-/* ---------- timeline layout ---------- */
-function compute() {
-  let end = 0;
-  S.clips.forEach((c, i) => {
-    const L = len(c);
-    let ov = 0;
-    if (i > 0 && c.tr.type !== 'none') ov = Math.min(c.tr.dur, 0.45 * len(S.clips[i - 1]), 0.45 * L);
-    c.ov = ov;
-    c.start = i === 0 ? 0 : end - ov;
-    c.end = c.start + L;
-    end = c.end;
+  // ---------- state ----------
+  const DEF = { per: 1, neg: 0.25, timerPct: 3, thr: 0.18, fillPct: 70, passPct: 40 };
+  const oldSet = LS.get('omr_settings', {});                         // settings of the older single-user version
+  const DEV = Object.assign({ thr: oldSet.thr || DEF.thr, fillPct: oldSet.fillPct || DEF.fillPct }, LS.get('omr_device', {}));   // this phone only
+  let WSS = { per: DEF.per, neg: DEF.neg, timerPct: DEF.timerPct, passPct: DEF.passPct, header: { l1: '', l2: '', l3: '', l4: 'Result Sheet' } };   // rules + heading of the open workspace
+  let WLOGO = '';
+  let S = Object.assign({}, DEF);                                     // merged view used by the scanner/scoring code
+  const applyS = () => { S = Object.assign({}, DEF, { per: WSS.per, neg: WSS.neg, timerPct: WSS.timerPct, passPct: WSS.passPct }, { thr: DEV.thr, fillPct: DEV.fillPct }); };
+  let A = LS.get('omr_auth', null);                                   // { url, token, user }
+  let dir = LS.get('omr_dir', { users: [], groups: [], requests: [] });
+  let wsId = '';
+  let customTpls = LS.get('omr_templates', []);   // sheet types shared by the admin: [{id,name,W,H,ref,align,rx,ry,labels,groups}]
+  let keys = {};                                  // answer keys of the open workspace: id -> {id,name,tplId,answers:{ "1":optIndex }}
+  let results = [];
+  let keyState = { id: '', tplId: 'builtin', answers: {} };
+  let sc = { sel: null };
+  let submitted = false, timerOn = false;
+  const builtin = OMR.builtinTemplate();
+  const allTpls = () => [builtin].concat(customTpls);
+  const getTpl = id => allTpls().find(t => t.id === id) || null;
+  const labelOf = (tpl, o) => (tpl.labels && tpl.labels[o]) || String.fromCharCode(65 + o);
+  const wsKey = id => 'omr_w_' + id;
+  const saveWsCache = () => { if (wsId) LS.set(wsKey(wsId), { keys, results, settings: WSS, logo: WLOGO }); };
+  const saveSettings = () => { LS.set('omr_device', DEV); saveWsCache(); };
+  const saveKeys = saveWsCache, saveResults = saveWsCache;
+  const saveTpls = () => LS.set('omr_templates', customTpls);
+  const isAdmin = () => !!(A && A.user && A.user.role === 'admin');
+  const canUp = () => !!(A && A.user && (A.user.role === 'admin' || A.user.canUpload));
+  const num = (v, d) => (typeof v === 'number' && isFinite(v) ? v : d);
+  function normWss(s) {
+    s = s || {}; const h = s.header || {};
+    return { per: num(s.per, DEF.per), neg: num(s.neg, DEF.neg), timerPct: num(s.timerPct, DEF.timerPct), passPct: num(s.passPct, DEF.passPct),
+      header: { l1: h.l1 || '', l2: h.l2 || '', l3: h.l3 || '', l4: h.l4 == null ? 'Result Sheet' : h.l4 } };
+  }
+  function toast(t) {
+    let e = $('#toast');
+    if (!e) { e = document.createElement('div'); e.id = 'toast'; e.style.cssText = 'position:fixed;left:12px;right:12px;bottom:18px;background:#0f172a;color:#fff;padding:10px 14px;border-radius:10px;z-index:90;font-size:14px;display:none'; document.body.appendChild(e); }
+    e.textContent = t; e.style.display = 'block'; clearTimeout(toast.t); toast.t = setTimeout(() => { e.style.display = 'none'; }, 4500);
+  }
+
+  // ---------- tabs ----------
+  document.querySelectorAll('nav button').forEach(b => b.onclick = () => {
+    document.querySelectorAll('nav button').forEach(x => x.classList.toggle('on', x === b));
+    document.querySelectorAll('section').forEach(s => s.classList.toggle('on', s.id === 'v-' + b.dataset.v));
+    if (b.dataset.v === 'res') renderResults();
+    if (b.dataset.v === 'scan') fillSelects();
+    if (b.dataset.v === 'tpl') renderTplList();
+    if (b.dataset.v === 'grp') { renderGroups(); pullDir(); }
+    if (b.dataset.v === 'prof') { renderProfile(); pullDir(); }
+    if (b.dataset.v === 'adm') loadAdmin();
+    if (b.dataset.v === 'set') fillWsForm();
   });
-  S.total = end;
-  $('scrub').max = end;
-}
+  function gotoTab(v) { const b = document.querySelector('nav button[data-v="' + v + '"]'); if (b) b.click(); }
 
-/* ---------- keyframes / transform ---------- */
-const PK = ['sc', 'px', 'py', 'rot', 'op'];
-function pickP(o) { return { sc: o.sc, px: o.px, py: o.py, rot: o.rot, op: o.op }; }
-function evalProps(c, lt) {
-  const k = c.kf;
-  if (!k.length) return pickP(c);
-  if (lt <= k[0].t) return pickP(k[0]);
-  if (lt >= k[k.length - 1].t) return pickP(k[k.length - 1]);
-  for (let i = 0; i < k.length - 1; i++) {
-    if (lt < k[i + 1].t) {
-      const a = k[i], b = k[i + 1], p = ease((lt - a.t) / (b.t - a.t));
-      const o = {};
-      PK.forEach(key => { o[key] = a[key] + (b[key] - a[key]) * p; });
-      return o;
-    }
-  }
-  return pickP(k[k.length - 1]);
-}
-function upsertKf(c, t, vals) {
-  const ex = c.kf.find(k => Math.abs(k.t - t) < 0.05);
-  if (ex) Object.assign(ex, pickP(vals));
-  else { c.kf.push({ t, ...pickP(vals) }); c.kf.sort((a, b) => a.t - b.t); }
-}
-function applyProps(c, obj) {
-  if (c.kf.length) {
-    const lt = clamp(S.t - c.start, 0, len(c));
-    upsertKf(c, lt, { ...evalProps(c, lt), ...obj });
-  } else Object.assign(c, obj);
-}
-
-/* ---------- audio graph ---------- */
-let AC = null, dest = null, master = null;
-function initAudio() {
-  if (AC) return;
-  AC = new (window.AudioContext || window.webkitAudioContext)();
-  dest = AC.createMediaStreamDestination();
-  master = AC.createGain();
-  master.connect(dest);
-  master.connect(AC.destination);
-  S.clips.forEach(wire);
-  S.audio.forEach(wire);
-}
-function wire(it) {
-  if (!AC || it.src || it.type === 'image') return;
-  it.src = AC.createMediaElementSource(it.el);
-  it.gain = AC.createGain();
-  it.src.connect(it.gain);
-  it.gain.connect(master);
-}
-function setGain(it, v) {
-  if (!it.gain) return;
-  try { it.gain.gain.setTargetAtTime(v, AC.currentTime, 0.015); } catch (e) { it.gain.gain.value = v; }
-}
-function pauseAllMedia() {
-  S.clips.forEach(c => { if (c.type === 'video' && !c.el.paused) c.el.pause(); });
-  S.audio.forEach(a => { if (!a.el.paused) a.el.pause(); });
-}
-
-/* ---------- loading media ---------- */
-function loadVideoEl(file) {
-  return new Promise((res, rej) => {
-    const el = document.createElement('video');
-    el.playsInline = true;
-    el.preload = 'auto';
-    el.src = URL.createObjectURL(file);
-    el.onerror = () => rej(new Error('Cannot open ' + (file.name || 'video')));
-    el.onloadedmetadata = () => {
-      const done = () => {
-        if (!el.videoWidth) return rej(new Error('Unsupported video: ' + (file.name || 'video')));
-        res(el);
-      };
-      // Browser-recorded WebM files report an infinite duration until seeked to the end.
-      if (el.duration === Infinity || isNaN(el.duration)) {
-        el.ontimeupdate = () => { el.ontimeupdate = null; el.currentTime = 0; done(); };
-        el.currentTime = 1e7;
-      } else done();
-    };
+  // ---------- zoom ----------
+  document.querySelectorAll('.zoom').forEach(z => {
+    const lv = [1, 1.6, 2.4, 3.4]; let i = 0;
+    z.querySelectorAll('[data-d]').forEach(b => b.onclick = () => {
+      i = Math.max(0, Math.min(lv.length - 1, i + Number(b.dataset.d)));
+      document.getElementById(z.dataset.for).style.width = lv[i] * 100 + '%';
+    });
   });
-}
-function thumbOf(src, w, h) {
-  const t = document.createElement('canvas');
-  t.width = 96; t.height = 54;
-  const x = t.getContext('2d');
-  const r = Math.max(96 / w, 54 / h);
-  try { x.drawImage(src, (96 - w * r) / 2, (54 - h * r) / 2, w * r, h * r); } catch (e) { }
-  return t;
-}
-async function mediaFromBlob(blob, name) {
-  if ((blob.type || '').startsWith('image/')) {
-    const img = new Image();
-    img.src = URL.createObjectURL(blob);
-    await img.decode().catch(() => { throw new Error('Cannot open ' + name); });
-    return { type: 'image', el: img, dur: 30, thumb: thumbOf(img, img.naturalWidth, img.naturalHeight) };
-  }
-  const el = await loadVideoEl(blob);
-  await new Promise(r => {
-    el.addEventListener('seeked', function f() { el.removeEventListener('seeked', f); r(); });
-    el.currentTime = Math.min(0.1, el.duration / 2);
-    setTimeout(r, 1500);
-  });
-  return { type: 'video', el, dur: el.duration, thumb: thumbOf(el, el.videoWidth, el.videoHeight) };
-}
-async function makeClip(file) {
-  const m = await mediaFromBlob(file, file.name);
-  return {
-    id: nid(), name: file.name, type: m.type, el: m.el, dur: m.dur, thumb: m.thumb,
-    blob: file, mkey: 'm' + nid(),
-    in: 0, out: m.type === 'image' ? 4 : m.dur, speed: 1, vol: 100, fi: 0, fo: 0, bg: defBg(), peaks: null,
-    tr: { type: 'none', dur: 0.5 }, f: defFilter(), fit: 'contain',
-    sc: 100, px: 0, py: 0, rot: 0, op: 100, kf: [],
-    start: 0, end: 0, ov: 0, src: null, gain: null
-  };
-}
-async function addMedia(files) {
-  let n = 0;
-  for (const f of files) {
-    try {
-      touch('add' + nid());
-      const c = await makeClip(f);
-      S.clips.push(c);
-      wire(c);
-      compute();
-      S.sel = c.id;
-      n++;
-    } catch (e) { toast(e.message); U.pop(); }
-  }
-  if (n) { refreshAll(); }
-}
-async function addAudio(files) {
-  for (const f of files) {
-    try {
-      touch('addA' + nid());
-      const el = new Audio();
-      el.preload = 'auto';
-      el.src = URL.createObjectURL(f);
-      await new Promise((res, rej) => {
-        el.onloadedmetadata = () => res();
-        el.onerror = () => rej(new Error('Cannot open ' + f.name));
-      });
-      const a = { id: nid(), type: 'audio', name: f.name, blob: f, mkey: 'm' + nid(), el, dur: isFinite(el.duration) ? el.duration : 600, in: 0, out: isFinite(el.duration) ? el.duration : 600, fi: 0, fo: 0, peaks: null, start: 0, vol: 80, src: null, gain: null };
-      S.audio.push(a);
-      wire(a);
-      S.asel = a.id;
-    } catch (e) { toast(e.message); U.pop(); }
-  }
-  refreshAll();
-}
 
-/* ---------- per-frame state: which clips show, and how ---------- */
-function transFx(fx, type, p, role) {
-  const W = cv.width, e = ease(p);
-  const inn = role === 'in';
-  switch (type) {
-    case 'fade':
-      if (inn) { fx.alpha *= e; fx.au *= e; } else fx.au *= 1 - e;
-      break;
-    case 'dip': {
-      const a = inn ? clamp(2 * e - 1, 0, 1) : clamp(1 - 2 * e, 0, 1);
-      fx.alpha *= a; fx.au *= a;
-      break;
-    }
-    case 'slideL':
-      if (inn) { fx.dx += (1 - e) * W; fx.au *= e; } else { fx.dx -= e * W; fx.au *= 1 - e; }
-      break;
-    case 'slideR':
-      if (inn) { fx.dx -= (1 - e) * W; fx.au *= e; } else { fx.dx += e * W; fx.au *= 1 - e; }
-      break;
-    case 'zoom':
-      if (inn) { fx.alpha *= e; fx.scale *= 1.3 - 0.3 * e; fx.au *= e; } else { fx.scale *= 1 + 0.3 * e; fx.au *= 1 - e; }
-      break;
-    case 'wipe':
-      if (inn) { fx.clip = e; fx.au *= e; } else fx.au *= 1 - e;
-      break;
-  }
-}
-function frameState(t) {
-  const out = [];
-  S.clips.forEach((c, i) => {
-    if (!(t >= c.start && t < c.end)) return;
-    const fx = { alpha: 1, dx: 0, scale: 1, clip: null, au: 1 };
-    const next = S.clips[i + 1];
-    if (c.ov > 0 && t < c.start + c.ov) transFx(fx, c.tr.type, (t - c.start) / c.ov, 'in');
-    else if (i === 0 && c.tr.type !== 'none' && t < c.start + c.tr.dur) {
-      const p = ease(clamp((t - c.start) / c.tr.dur, 0, 1));
-      fx.alpha *= p; fx.au *= p;
-    }
-    if (next && next.ov > 0 && t >= next.start) transFx(fx, next.tr.type, (t - next.start) / next.ov, 'out');
-    fx.au *= fadeF(c.fi || 0, c.fo || 0, t - c.start, len(c));
-    out.push({ c, fx });
-  });
-  return out;
-}
-
-// Seek a <video> and wait until the frame is ready (used when exporting frame by frame).
-function seekEl(el, target) {
-  return new Promise(res => {
-    if (!el.seeking && Math.abs(el.currentTime - target) < 0.0005 && el.readyState >= 2) return res();
-    let done = false;
-    const fin = () => { if (done) return; done = true; el.removeEventListener('seeked', fin); clearTimeout(tm); res(); };
-    const tm = setTimeout(fin, 2000);
-    el.addEventListener('seeked', fin);
-    if (!el.paused) el.pause();
-    el.currentTime = target;
-  });
-}
-
-/* ---------- keep <video>/<audio> elements in sync with the playhead ---------- */
-function syncMedia(t, st) {
-  const fxOf = new Map(st.map(s => [s.c.id, s.fx]));
-  S.clips.forEach(c => {
-    if (c.type !== 'video') return;
-    const fx = fxOf.get(c.id);
-    const el = c.el;
-    if (fx) {
-      const target = clamp(c.in + (t - c.start) * c.speed, 0, Math.max(0, c.dur - 0.02));
-      const rate = clamp(c.speed, 0.25, 4);
-      if (el.playbackRate !== rate) el.playbackRate = rate;
-      if (S.playing) {
-        if (el.paused) { el.currentTime = target; el.play().catch(() => { }); }
-        else if (Math.abs(el.currentTime - target) > 0.4) el.currentTime = target;
-      } else {
-        if (!el.paused) el.pause();
-        if (!el.seeking && Math.abs(el.currentTime - target) > 0.04) el.currentTime = target;
-      }
-      setGain(c, S.playing ? (c.vol / 100) * fx.au : 0);
-    } else {
-      if (!el.paused) el.pause();
-      setGain(c, 0);
-      // Warm up the first frame of a clip that is about to start.
-      if (c.start > t && c.start - t < 1.2 && !el.seeking && Math.abs(el.currentTime - c.in) > 0.1) el.currentTime = c.in;
-    }
-  });
-  S.audio.forEach(a => {
-    const aL = alen(a);
-    const active = t >= a.start && t < a.start + aL;
-    const el = a.el;
-    if (active && S.playing) {
-      const target = a.in + (t - a.start);
-      if (el.paused) { el.currentTime = target; el.play().catch(() => { }); }
-      else if (Math.abs(el.currentTime - target) > 0.4) el.currentTime = target;
-      setGain(a, (a.vol / 100) * fadeF(a.fi || 0, a.fo || 0, t - a.start, aL));
-    } else {
-      if (!el.paused) el.pause();
-      setGain(a, 0);
-    }
-  });
-}
-
-/* ---------- drawing ---------- */
-function filterOf(f, F) {
-  const p = [];
-  if (f.b !== 100) p.push(`brightness(${f.b}%)`);
-  if (f.c !== 100) p.push(`contrast(${f.c}%)`);
-  if (f.s !== 100) p.push(`saturate(${f.s}%)`);
-  if (f.h) p.push(`hue-rotate(${f.h}deg)`);
-  if (f.bl) p.push(`blur(${(f.bl * F).toFixed(1)}px)`);
-  if (f.preset) p.push(PRESETS[f.preset]);
-  return p.length ? p.join(' ') : 'none';
-}
-function drawClip(c, t, fx) {
-  const W = cv.width, H = cv.height, F = Math.min(W, H) / 720;
-  const p = evalProps(c, t - c.start);
-  const fr = S.exporting ? c.exFrame : null; // frame from the fast exporter's decoder
-  let el = c.el, sw, sh, rw, rh, rot = 0;
-  if (fr) {
-    rot = c.fs ? c.fs.rot : 0;
-    rw = fr.displayWidth; rh = fr.displayHeight;
-    sw = rot % 180 ? rh : rw; sh = rot % 180 ? rw : rh;
-    el = fr;
-  } else {
-    sw = rw = c.type === 'video' ? el.videoWidth : el.naturalWidth;
-    sh = rh = c.type === 'video' ? el.videoHeight : el.naturalHeight;
-  }
-  if (!sw || !sh) return;
-  const base = c.fit === 'cover' ? Math.max(W / sw, H / sh) : Math.min(W / sw, H / sh);
-  const s = base * (p.sc / 100) * fx.scale;
-  let drawEl = el, dw = rw, dh = rh, drot = rot;
-  if (c.bg && c.bg.on && !S.noCut && window.cutoutFrame) {
-    const tmp = cutoutFrame(c, el, rw, rh, rot, sw, sh, t);
-    if (tmp) {
-      if (c.bg.fill !== 'none' && window.drawBackdrop) drawBackdrop(c, fx, W, H, F, el, rw, rh, rot, sw, sh);
-      drawEl = tmp; dw = sw; dh = sh; drot = 0;
-    }
-  }
-  ctx.save();
-  if (fx.clip !== null) { ctx.beginPath(); ctx.rect(0, 0, W * fx.clip, H); ctx.clip(); }
-  ctx.globalAlpha = clamp(fx.alpha * p.op / 100, 0, 1);
-  ctx.translate(W / 2 + p.px / 100 * W + fx.dx, H / 2 + p.py / 100 * H);
-  ctx.rotate(p.rot * Math.PI / 180);
-  if (drot) ctx.rotate(drot * Math.PI / 180);
-  ctx.filter = filterOf(c.f, F);
-  try { ctx.drawImage(drawEl, -dw * s / 2, -dh * s / 2, dw * s, dh * s); } catch (e) { }
-  ctx.restore();
-}
-function rr(x, y, w, h, r) {
-  ctx.beginPath();
-  ctx.moveTo(x + r, y);
-  ctx.arcTo(x + w, y, x + w, y + h, r);
-  ctx.arcTo(x + w, y + h, x, y + h, r);
-  ctx.arcTo(x, y + h, x, y, r);
-  ctx.arcTo(x, y, x + w, y, r);
-  ctx.closePath();
-}
-function drawText(L, t) {
-  const W = cv.width, H = cv.height, F = Math.min(W, H) / 720;
-  const vis = t >= L.from && t <= L.to;
-  const ghost = !vis && L.id === S.tsel && !S.playing && !S.exporting;
-  if (!vis && !ghost) { L._box = null; return; }
-  const lt = t - L.from, d = Math.max(0.1, L.to - L.from);
-  const pin = ghost ? 1 : clamp(lt / 0.45, 0, 1);
-  const pout = ghost ? 1 : clamp((L.to - t) / 0.3, 0, 1);
-  let a = ghost ? 0.4 : 1, dx = 0, dy = 0, sc = 1, str = L.text;
-  switch (L.anim) {
-    case 'fade': a *= Math.min(pin, pout); break;
-    case 'up': a *= Math.min(pin, pout); dy = (1 - ease(pin)) * 70 * F; break;
-    case 'left': dx = -(1 - ease(pin)) * 320 * F; a *= pout; break;
-    case 'pop': sc = Math.max(0.01, easeOutBack(pin)); a *= pout; break;
-    case 'type': {
-      const dur = Math.max(0.3, Math.min(2.5, d * 0.6));
-      str = L.text.slice(0, Math.ceil(L.text.length * clamp(lt / dur, 0, 1)));
-      a *= pout;
-      break;
-    }
-  }
-  const px = L.size * F;
-  ctx.save();
-  ctx.font = `${L.bold ? 800 : 500} ${px}px ${FONT}`;
-  const w = ctx.measureText(L.text || ' ').width;
-  const pad = L.bgOn ? px * 0.35 : 0;
-  const cx0 = L.x * W + dx, cy0 = L.y * H + dy;
-  L._box = { x: cx0 - w / 2 - pad - 12 * F, y: cy0 - px / 2 - pad - 12 * F, w: w + pad * 2 + 24 * F, h: px + pad * 2 + 24 * F };
-  ctx.globalAlpha = a;
-  ctx.translate(cx0, cy0);
-  ctx.scale(sc, sc);
-  ctx.textBaseline = 'middle';
-  ctx.textAlign = 'left';
-  ctx.lineJoin = 'round';
-  if (L.bgOn) {
-    ctx.fillStyle = L.bg;
-    rr(-w / 2 - pad, -px / 2 - pad * 0.6, w + pad * 2, px + pad * 1.2, px * 0.25);
-    ctx.fill();
-  } else {
-    ctx.lineWidth = px / 8;
-    ctx.strokeStyle = 'rgba(0,0,0,.85)';
-    ctx.strokeText(str, -w / 2, 0);
-  }
-  ctx.fillStyle = L.color;
-  ctx.fillText(str, -w / 2, 0);
-  if (L.id === S.tsel && !S.playing && !S.exporting) {
-    ctx.globalAlpha = 1;
-    ctx.setLineDash([8, 6]);
-    ctx.lineWidth = 2;
-    ctx.strokeStyle = '#7a5cff';
-    ctx.strokeRect(-w / 2 - pad - 8, -px / 2 - pad - 8, w + pad * 2 + 16, px + pad * 2 + 16);
-  }
-  ctx.restore();
-}
-function render(noSync) {
-  const W = cv.width, H = cv.height;
-  ctx.globalAlpha = 1;
-  ctx.filter = 'none';
-  ctx.fillStyle = S.bg;
-  ctx.fillRect(0, 0, W, H);
-  const t = S.total > 0 ? Math.min(S.t, S.total - 0.001) : 0;
-  const st = frameState(t);
-  if (!noSync) syncMedia(t, st);
-  st.forEach(({ c, fx }) => drawClip(c, t, fx));
-  if (S.vignette) {
-    const g = ctx.createRadialGradient(W / 2, H / 2, Math.min(W, H) * 0.3, W / 2, H / 2, Math.max(W, H) * 0.7);
-    g.addColorStop(0, 'rgba(0,0,0,0)');
-    g.addColorStop(1, 'rgba(0,0,0,.65)');
-    ctx.fillStyle = g;
-    ctx.fillRect(0, 0, W, H);
-  }
-  if (S.letterbox) {
+  // ---------- drawing ----------
+  function drawBuiltinSheet(ctx) {
+    ctx.save();
+    ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, C.W, C.H);
+    // four black corner squares (used to straighten the photo)
     ctx.fillStyle = '#000';
-    ctx.fillRect(0, 0, W, H * 0.12);
-    ctx.fillRect(0, H * 0.88, W, H * 0.12);
+    OMR.MARKERS.forEach(p => ctx.fillRect(p[0] - C.MK / 2, p[1] - C.MK / 2, C.MK, C.MK));
+    // dashed lines between the four column blocks
+    ctx.strokeStyle = '#000'; ctx.lineWidth = 5; ctx.setLineDash([22, 14]);
+    for (let c = 1; c < C.COLS; c++) {
+      const x = C.GX0 + c * C.COLW - 144;
+      ctx.beginPath(); ctx.moveTo(x, 12); ctx.lineTo(x, C.H - 12); ctx.stroke();
+    }
+    ctx.setLineDash([]);
+    // bubbles with the option letter inside, question number on the left
+    ctx.lineWidth = 2.5; ctx.strokeStyle = '#222'; ctx.textBaseline = 'middle';
+    for (let q = 0; q < C.ROWS * C.COLS; q++) {
+      for (let o = 0; o < C.OPT; o++) {
+        const p = OMR.bubble(q, o);
+        ctx.beginPath(); ctx.arc(p[0], p[1], C.BR, 0, 7); ctx.stroke();
+        ctx.fillStyle = '#666'; ctx.textAlign = 'center'; ctx.font = '19px ' + FONT;
+        ctx.fillText(String.fromCharCode(97 + o), p[0], p[1] + 1);
+      }
+      const p0 = OMR.bubble(q, 0);
+      ctx.fillStyle = '#111'; ctx.textAlign = 'right'; ctx.font = 'bold 22px ' + FONT;
+      ctx.fillText(String(q + 1), p0[0] - C.BR - 22, p0[1] + 1);
+    }
+    ctx.restore();
   }
-  S.texts.forEach(L => drawText(L, t));
-  if (window.drawCaptions) drawCaptions(t);
-}
+  function drawGenericSheet(ctx, tpl) {
+    ctx.save();
+    ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, tpl.W, tpl.H);
+    ctx.strokeStyle = '#cbd5e1'; ctx.lineWidth = 2; ctx.strokeRect(3, 3, tpl.W - 6, tpl.H - 6);
+    const r = Math.max(tpl.rx, tpl.ry);
+    ctx.lineWidth = Math.max(1.5, r / 8); ctx.strokeStyle = '#334155';
+    tpl.groups.forEach((g, q) => {
+      g.pts.forEach((p, o) => {
+        ctx.beginPath(); ctx.ellipse(p[0], p[1], tpl.rx, tpl.ry, 0, 0, 7); ctx.stroke();
+        ctx.fillStyle = '#94a3b8'; ctx.font = Math.round(r * 1.05) + 'px ' + FONT; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+        ctx.fillText(labelOf(tpl, o), p[0], p[1] + 1);
+      });
+      const a = g.pts[0], b = g.pts[1] || [a[0] + 1, a[1]];
+      const vertical = Math.abs(b[1] - a[1]) > Math.abs(b[0] - a[0]);
+      ctx.fillStyle = '#0f172a'; ctx.font = 'bold ' + Math.round(r * 1.25) + 'px ' + FONT; ctx.textBaseline = 'middle';
+      if (vertical) { ctx.textAlign = 'center'; ctx.fillText(String(q + 1), a[0], a[1] - tpl.ry * 2.1); }
+      else { ctx.textAlign = 'right'; ctx.fillText(String(q + 1), a[0] - tpl.rx * 1.7, a[1] + 1); }
+    });
+    ctx.restore();
+  }
+  function drawTemplate(ctx, tpl) { if (tpl.builtin) drawBuiltinSheet(ctx); else drawGenericSheet(ctx, tpl); }
+  function ell(ctx, tpl, p, fill, stroke, dash, extra) {
+    ctx.save(); ctx.beginPath(); ctx.ellipse(p[0], p[1], tpl.rx + (extra || 4), tpl.ry + (extra || 4), 0, 0, 7);
+    if (fill) { ctx.fillStyle = fill; ctx.fill(); }
+    ctx.lineWidth = 3; ctx.strokeStyle = stroke; if (dash) ctx.setLineDash([5, 4]); ctx.stroke(); ctx.restore();
+  }
+  function hit(cv, ev, tpl) {
+    const r = cv.getBoundingClientRect();
+    const x = (ev.clientX - r.left) * cv.width / r.width, y = (ev.clientY - r.top) * cv.height / r.height;
+    const lim = Math.max(tpl.rx, tpl.ry) * 1.6; let best = null, bd = lim * lim;
+    for (let q = 0; q < tpl.groups.length; q++) { const pts = tpl.groups[q].pts; for (let o = 0; o < pts.length; o++) {
+      const d = (pts[o][0] - x) * (pts[o][0] - x) + (pts[o][1] - y) * (pts[o][1] - y);
+      if (d < bd) { bd = d; best = [q, o]; } } }
+    return best;
+  }
 
-/* ---------- canvas size ---------- */
-function setSize(short) {
-  const r = S.ratio;
-  let w, h;
-  if (r === '9:16') { w = short; h = Math.round(short * 16 / 9); }
-  else if (r === '16:9') { h = short; w = Math.round(short * 16 / 9); }
-  else if (r === '1:1') { w = h = short; }
-  else { w = short; h = Math.round(short * 5 / 4); }
-  cv.width = w & ~1;
-  cv.height = h & ~1;
-  fitCanvas();
-}
-function fitCanvas() {
-  const aw = stage.clientWidth, ah = stage.clientHeight;
-  if (!aw || !ah) return;
-  const k = Math.min(aw / cv.width, ah / cv.height);
-  cv.style.width = Math.floor(cv.width * k) + 'px';
-  cv.style.height = Math.floor(cv.height * k) + 'px';
-}
+  // ---------- photo loading ----------
+  function loadPhoto(file, maxDim) {
+    return new Promise((res, rej) => {
+      const u = URL.createObjectURL(file), im = new Image();
+      im.onload = () => {
+        URL.revokeObjectURL(u);
+        const k = Math.min(1, (maxDim || 1800) / Math.max(im.naturalWidth, im.naturalHeight));
+        const w = Math.round(im.naturalWidth * k), h = Math.round(im.naturalHeight * k);
+        const cv = document.createElement('canvas'); cv.width = w; cv.height = h;
+        const cx = cv.getContext('2d', { willReadFrequently: true }); cx.drawImage(im, 0, 0, w, h);
+        res({ cv, w, h, rgba: cx.getImageData(0, 0, w, h).data });
+      };
+      im.onerror = () => { URL.revokeObjectURL(u); rej(new Error('Could not open the image')); };
+      im.src = u;
+    });
+  }
 
-/* ---------- playback ---------- */
-async function play() {
-  if (!S.clips.length) return toast('Add a clip first');
-  initAudio();
-  await AC.resume();
-  if (S.t >= S.total - 0.05) S.t = 0;
-  S.playing = true;
-  $('play').innerHTML = '&#9208;';
-}
-function pause() {
-  S.playing = false;
-  $('play').innerHTML = '&#9654;';
-}
-function seek(t) {
-  S.t = clamp(t, 0, S.total);
-  refreshAnim();
-  updateTime();
-  drawTimeline();
-}
-$('play').onclick = () => (S.playing ? pause() : play());
-$('toStart').onclick = () => seek(0);
-$('toEnd').onclick = () => { pause(); seek(S.total); };
-$('scrub').oninput = e => seek(+e.target.value);
-
-let lastNow = performance.now(), lastDraw = 0, lastTl = 0;
-function loop(now) {
-  const dt = Math.min(0.25, (now - lastNow) / 1000);
-  lastNow = now;
-  if (S.playing) {
-    S.t += dt;
-    if (S.t >= S.total) {
-      S.t = S.total;
-      if (S.exporting) finishExport(); else pause();
+  // ---------- corner editor ----------
+  let cornerCb = null, cornerState = null;
+  function openCorners(photo, quad, hint, cb) {
+    const ov = $('#cornerOv'), cv = $('#cornerCv');
+    const dispW = Math.min(window.innerWidth - 24, 760), k = dispW / photo.w;
+    cv.width = Math.round(photo.w * k); cv.height = Math.round(photo.h * k);
+    cv.style.width = cv.width + 'px'; cv.style.height = cv.height + 'px';
+    cornerState = { photo, k, pts: quad.map(p => [p[0], p[1]]), drag: -1 };
+    cornerCb = cb; $('#cornerHint').textContent = hint; ov.classList.add('on'); ov.scrollTop = 0;
+    drawCorners();
+  }
+  const NAMES = ['TL', 'TR', 'BR', 'BL'];
+  function drawCorners() {
+    const st = cornerState, cv = $('#cornerCv'), x = cv.getContext('2d'), k = st.k;
+    x.clearRect(0, 0, cv.width, cv.height); x.drawImage(st.photo.cv, 0, 0, cv.width, cv.height);
+    x.lineWidth = 2; x.strokeStyle = '#22d3ee'; x.beginPath();
+    st.pts.forEach((p, i) => { if (i) x.lineTo(p[0] * k, p[1] * k); else x.moveTo(p[0] * k, p[1] * k); }); x.closePath(); x.stroke();
+    st.pts.forEach((p, i) => {
+      x.beginPath(); x.arc(p[0] * k, p[1] * k, 14, 0, 7); x.fillStyle = 'rgba(34,211,238,.25)'; x.fill(); x.stroke();
+      x.beginPath(); x.moveTo(p[0] * k - 20, p[1] * k); x.lineTo(p[0] * k + 20, p[1] * k); x.moveTo(p[0] * k, p[1] * k - 20); x.lineTo(p[0] * k, p[1] * k + 20); x.stroke();
+      x.fillStyle = '#fff'; x.font = 'bold 13px ' + FONT; x.fillText(NAMES[i], p[0] * k + 16, p[1] * k - 16);
+    });
+    if (st.drag >= 0) { // loupe
+      const p = st.pts[st.drag], R = 60, lx = p[0] * k < cv.width / 2 ? cv.width - R - 8 : R + 8, ly = R + 8, z = 3, sr = R / z;
+      x.save(); x.beginPath(); x.arc(lx, ly, R, 0, 7); x.clip(); x.fillStyle = '#000'; x.fillRect(lx - R, ly - R, 2 * R, 2 * R);
+      x.drawImage(st.photo.cv, p[0] - sr, p[1] - sr, 2 * sr, 2 * sr, lx - R, ly - R, 2 * R, 2 * R); x.restore();
+      x.strokeStyle = '#22d3ee'; x.beginPath(); x.arc(lx, ly, R, 0, 7); x.moveTo(lx - 12, ly); x.lineTo(lx + 12, ly); x.moveTo(lx, ly - 12); x.lineTo(lx, ly + 12); x.stroke();
     }
   }
-  if (!S.fast && (S.playing || now - lastDraw > 120)) { render(); lastDraw = now; }
-  if (S.playing && now - lastTl > 90) {
-    updateTime();
-    drawTimeline();
-    lastTl = now;
-    if (S.exporting) $('busyProg').value = S.total ? S.t / S.total : 0;
-  }
-  requestAnimationFrame(loop);
-}
-
-function updateTime() {
-  $('time').textContent = fmt(S.t) + ' / ' + fmt(S.total);
-  $('scrub').value = S.t;
-}
-
-/* ---------- timeline canvas ---------- */
-const tl = $('tl'), tx = tl.getContext('2d'), wrap = $('tlwrap');
-let hits = [], pps = 60;
-const PAD = 14, RULER = 22, VH = 52;
-function lanesOf(items, gs, ge) {
-  const ends = [];
-  return items.map(it => {
-    let l = ends.findIndex(e => e <= gs(it) + 1e-6);
-    if (l < 0) { l = ends.length; ends.push(0); }
-    ends[l] = ge(it);
-    return l;
-  });
-}
-function drawTimeline() {
-  const dpr = Math.min(2, window.devicePixelRatio || 1);
-  const tLanes = lanesOf(S.texts, L => L.from, L => L.to);
-  const cLanes = lanesOf(S.caps, c => c.from, c => c.to);
-  const aLanes = lanesOf(S.audio, a => a.start, a => a.start + alen(a));
-  const nT = tLanes.length ? Math.max(...tLanes) + 1 : 0;
-  const nC = cLanes.length ? Math.max(...cLanes) + 1 : 0;
-  const nA = aLanes.length ? Math.max(...aLanes) + 1 : 0;
-  const yT = RULER + 4 + VH + 6;
-  const yC = yT + nT * 16 + (nT ? 4 : 0);
-  const yA = yC + nC * 16 + (nC ? 4 : 0);
-  const Hpx = yA + nA * 26 + 10;
-  const Wpx = Math.max(wrap.clientWidth, Math.ceil(S.total * pps) + PAD * 2 + 80);
-  if (tl.width !== Math.round(Wpx * dpr) || tl.height !== Math.round(Hpx * dpr)) {
-    tl.width = Math.round(Wpx * dpr);
-    tl.height = Math.round(Hpx * dpr);
-    tl.style.width = Wpx + 'px';
-    tl.style.height = Hpx + 'px';
-  }
-  tx.setTransform(dpr, 0, 0, dpr, 0, 0);
-  tx.clearRect(0, 0, Wpx, Hpx);
-  hits = [];
-
-  // ruler
-  const step = pps >= 120 ? 1 : pps >= 50 ? 2 : pps >= 30 ? 5 : 10;
-  tx.font = '10px system-ui,sans-serif';
-  tx.textBaseline = 'top';
-  tx.fillStyle = '#7d7d92';
-  tx.strokeStyle = '#2f2f40';
-  tx.lineWidth = 1;
-  for (let s = 0; PAD + s * pps < Wpx; s += step) {
-    const x = Math.round(PAD + s * pps) + 0.5;
-    tx.beginPath(); tx.moveTo(x, 12); tx.lineTo(x, RULER); tx.stroke();
-    tx.fillText(fmt(s).replace('.0', ''), x + 3, 2);
+  (function () {
+    const cv = $('#cornerCv');
+    const pos = e => { const r = cv.getBoundingClientRect(); return [(e.clientX - r.left) / cornerState.k * (cv.width / r.width), (e.clientY - r.top) / cornerState.k * (cv.width / r.width)]; };
+    cv.addEventListener('pointerdown', e => {
+      if (!cornerState) return; const p = pos(e); let bi = -1, bd = Infinity;
+      cornerState.pts.forEach((q, i) => { const d = Math.hypot(q[0] - p[0], q[1] - p[1]) * cornerState.k; if (d < bd) { bd = d; bi = i; } });
+      if (bd < 60) { cornerState.drag = bi; cv.setPointerCapture(e.pointerId); cornerState.pts[bi] = p; drawCorners(); }
+    });
+    cv.addEventListener('pointermove', e => { if (cornerState && cornerState.drag >= 0) { cornerState.pts[cornerState.drag] = pos(e); drawCorners(); } });
+    const up = () => { if (cornerState) { cornerState.drag = -1; drawCorners(); } };
+    cv.addEventListener('pointerup', up); cv.addEventListener('pointercancel', up);
+    $('#cornerRot').onclick = () => { const p = cornerState.pts; cornerState.pts = [p[1], p[2], p[3], p[0]]; drawCorners(); };
+    $('#cornerCancel').onclick = () => { $('#cornerOv').classList.remove('on'); cornerState = null; cornerCb = null; };
+    $('#cornerOk').onclick = () => { const pts = cornerState.pts.map(p => [p[0], p[1]]), cb = cornerCb; $('#cornerOv').classList.remove('on'); cornerState = null; cornerCb = null; if (cb) cb(pts); };
+  })();
+  const quadMove = (a, b) => Math.max.apply(null, a.map((p, i) => Math.hypot(p[0] - b[i][0], p[1] - b[i][1])));
+  const insetQuad = (w, h) => [[w * 0.1, h * 0.08], [w * 0.9, h * 0.08], [w * 0.9, h * 0.92], [w * 0.1, h * 0.92]];
+  function cornerHint(tpl) {
+    if (tpl.align === 'markers') return 'Drag each handle onto the centre of the matching black corner square (TL = top-left of the SHEET, etc.). Use “Rotate corner labels” if the sheet is turned.';
+    if (tpl.align === 'page') return 'Drag each handle to the matching corner of the paper (TL = top-left of the SHEET, etc.). Use “Rotate corner labels” if the sheet is turned.';
+    return 'Drag each handle to the same four reference points you used when you created this sheet type (usually the paper corners).';
   }
 
-  // video clips
-  S.clips.forEach((c, i) => {
-    const x = PAD + c.start * pps, w = Math.max(4, (c.end - c.start) * pps), y = RULER + 4;
-    tx.save();
-    tx.beginPath(); tx.rect(x, y, w, VH); tx.clip();
-    tx.fillStyle = c.type === 'image' ? '#3a2f55' : '#27324d';
-    tx.fillRect(x, y, w, VH);
-    if (c.thumb) {
-      const tw = VH * 96 / 54;
-      for (let tx0 = x; tx0 < x + w; tx0 += tw) tx.drawImage(c.thumb, tx0, y, tw, VH);
-    }
-    const g = tx.createLinearGradient(0, y + VH - 18, 0, y + VH);
-    g.addColorStop(0, 'rgba(0,0,0,0)'); g.addColorStop(1, 'rgba(0,0,0,.75)');
-    tx.fillStyle = g; tx.fillRect(x, y + VH - 18, w, 18);
-    if (window.drawPeaks && c.type === 'video' && c.peaks && c.vol > 0) drawPeaks(tx, c.peaks, x, y + VH - 15, w, 12, c.in / c.dur, c.out / c.dur, 'rgba(255,255,255,.5)');
-    tx.fillStyle = '#fff'; tx.font = '10px system-ui,sans-serif'; tx.textBaseline = 'alphabetic';
-    tx.fillText((i + 1) + ' · ' + c.name + (c.speed !== 1 ? ' · ' + c.speed + 'x' : ''), x + 4, y + VH - 5);
-    if (c.ov > 0) {
-      tx.fillStyle = 'rgba(122,92,255,.55)';
-      tx.fillRect(x, y, c.ov * pps, VH);
-      tx.fillStyle = '#fff'; tx.fillText('◇', x + 2, y + 12);
-    }
-    if (c.kf.length) { tx.fillStyle = '#ffd166'; tx.fillText('◆'.repeat(Math.min(c.kf.length, 6)), x + 4, y + 12 + (c.ov > 0 ? 0 : 0)); }
-    tx.restore();
-    if (c.id === S.sel) { tx.strokeStyle = '#fff'; tx.lineWidth = 2; tx.strokeRect(x + 1, y + 1, w - 2, VH - 2); }
-    hits.push({ x, y, w, h: VH, kind: 'clip', id: c.id });
-  });
-
-  // text layers
-  S.texts.forEach((L, i) => {
-    const x = PAD + L.from * pps, w = Math.max(6, (L.to - L.from) * pps), y = yT + tLanes[i] * 16;
-    tx.fillStyle = '#8b5fd6';
-    tx.fillRect(x, y, w, 14);
-    tx.fillStyle = '#fff'; tx.font = '10px system-ui,sans-serif'; tx.textBaseline = 'middle';
-    tx.save(); tx.beginPath(); tx.rect(x, y, w, 14); tx.clip();
-    tx.fillText('T ' + L.text, x + 3, y + 7);
-    tx.restore();
-    if (L.id === S.tsel) { tx.strokeStyle = '#fff'; tx.lineWidth = 2; tx.strokeRect(x + 1, y + 1, w - 2, 12); }
-    hits.push({ x, y, w, h: 14, kind: 'text', id: L.id });
-  });
-
-  // caption lane
-  S.caps.forEach((cp, i) => {
-    const x = PAD + cp.from * pps, w = Math.max(5, (cp.to - cp.from) * pps), y = yC + cLanes[i] * 16;
-    tx.fillStyle = '#c98a1b';
-    tx.fillRect(x, y, w, 14);
-    tx.fillStyle = '#fff'; tx.font = '10px system-ui,sans-serif'; tx.textBaseline = 'middle';
-    tx.save(); tx.beginPath(); tx.rect(x, y, w, 14); tx.clip();
-    tx.fillText(cp.text, x + 3, y + 7);
-    tx.restore();
-    if (cp.id === S.capSel) { tx.strokeStyle = '#fff'; tx.lineWidth = 2; tx.strokeRect(x + 1, y + 1, w - 2, 12); }
-    hits.push({ x, y, w, h: 14, kind: 'cap', id: cp.id });
-  });
-
-  // audio tracks (with waveform)
-  S.audio.forEach((a, i) => {
-    const aw = alen(a);
-    const x = PAD + a.start * pps, w = Math.max(6, aw * pps), y = yA + aLanes[i] * 26;
-    tx.fillStyle = '#1f6f4f';
-    tx.fillRect(x, y, w, 24);
-    if (window.drawPeaks && a.peaks) drawPeaks(tx, a.peaks, x, y + 1, w, 22, a.in / a.dur, a.out / a.dur, 'rgba(160,255,210,.85)');
-    tx.fillStyle = '#fff'; tx.font = '10px system-ui,sans-serif'; tx.textBaseline = 'top';
-    tx.save(); tx.beginPath(); tx.rect(x, y, w, 24); tx.clip();
-    tx.fillText('♪ ' + a.name, x + 3, y + 2);
-    tx.restore();
-    if (a.id === S.asel) { tx.strokeStyle = '#fff'; tx.lineWidth = 2; tx.strokeRect(x + 1, y + 1, w - 2, 22); }
-    hits.push({ x, y, w, h: 24, kind: 'audio', id: a.id });
-  });
-
-  // playhead
-  const px = PAD + S.t * pps;
-  tx.strokeStyle = '#ff4d6d'; tx.fillStyle = '#ff4d6d'; tx.lineWidth = 2;
-  tx.beginPath(); tx.moveTo(px, 0); tx.lineTo(px, Hpx); tx.stroke();
-  tx.beginPath(); tx.moveTo(px - 5, 0); tx.lineTo(px + 5, 0); tx.lineTo(px, 8); tx.fill();
-
-  // keep the playhead in view while playing
-  if (S.playing) {
-    if (px > wrap.scrollLeft + wrap.clientWidth - 30) wrap.scrollLeft = px - 40;
-    else if (px < wrap.scrollLeft) wrap.scrollLeft = Math.max(0, px - 40);
+  // ---------- selects ----------
+  function fillSelects() {
+    const ids = Object.keys(keys);
+    const ks = $('#keySel');
+    ks.innerHTML = '<option value="">＋ New answer key</option>' + ids.map(id => `<option value="${esc(id)}">${esc(keys[id].name)} (${Object.keys(keys[id].answers).length} Q)</option>`).join('');
+    ks.value = keyState.id;
+    const kt = $('#keyTpl');
+    kt.innerHTML = allTpls().map(t => `<option value="${esc(t.id)}">${esc(t.name)}</option>`).join('');
+    kt.value = keyState.tplId; kt.disabled = !!keyState.id;
+    const ss = $('#scanKey'), cur = ss.value;
+    ss.innerHTML = ids.length ? ids.map(id => { const t = getTpl(keys[id].tplId); return `<option value="${esc(id)}">${esc(keys[id].name)} — ${esc(t ? t.name : 'missing sheet type')}</option>`; }).join('')
+      : '<option value="">— save an answer key first —</option>';
+    if (cur && keys[cur]) ss.value = cur;
   }
-}
-tl.addEventListener('click', e => {
-  const r = tl.getBoundingClientRect();
-  const x = e.clientX - r.left, y = e.clientY - r.top;
-  let hit = null;
-  for (let i = hits.length - 1; i >= 0; i--) {
-    const h = hits[i];
-    if (x >= h.x && x <= h.x + h.w && y >= h.y && y <= h.y + h.h) { hit = h; break; }
+
+  // ---------- answer key tab ----------
+  const keyCv = $('#keyCv');
+  function keyTpl() { return getTpl(keyState.tplId) || builtin; }
+  function renderKey() {
+    const tpl = keyTpl(); keyCv.width = tpl.W; keyCv.height = tpl.H;
+    const x = keyCv.getContext('2d'); drawTemplate(x, tpl);
+    const qs = Object.keys(keyState.answers);
+    qs.forEach(q => {
+      const g = tpl.groups[q - 1]; if (!g || !g.pts[keyState.answers[q]]) return;
+      const p = g.pts[keyState.answers[q]];
+      x.beginPath(); x.ellipse(p[0], p[1], tpl.rx - 1, tpl.ry - 1, 0, 0, 7); x.fillStyle = '#111'; x.fill();
+    });
+    $('#keyCount').textContent = 'Answers set: ' + qs.length + ' of ' + tpl.groups.length + ' questions';
   }
-  const time = clamp((x - PAD) / pps, 0, S.total);
-  if (hit) {
-    if (hit.kind === 'clip') { S.sel = hit.id; seek(time); }
-    else if (hit.kind === 'text') { S.tsel = hit.id; openTab('text'); }
-    else if (hit.kind === 'cap') { S.capSel = hit.id; openTab('captions'); }
-    else { S.asel = hit.id; openTab('audio'); }
-    refreshAll();
-  } else seek(time);
-});
-$('zoom').oninput = e => { pps = +e.target.value; drawTimeline(); };
-
-/* ---------- Media tab ---------- */
-$('addMedia').onchange = e => { addMedia([...e.target.files]); e.target.value = ''; };
-
-function refreshMedia() {
-  const c = selClip();
-  $('n-media').classList.toggle('off', !c);
-  if (!c) { $('selInfo').textContent = 'No clip selected. Tap a clip on the timeline.'; return; }
-  const i = S.clips.indexOf(c);
-  $('selInfo').textContent = `Clip ${i + 1} of ${S.clips.length} · ${c.name} · ${fmt(len(c))}`;
-  const img = c.type === 'image';
-  setR('trIn', c.in, 0, Math.max(0.1, (img ? 0 : c.dur - 0.1)));
-  setR('trOut', c.out, 0.1, c.dur);
-  $('trIn').disabled = img;
-  $('spd').disabled = img;
-  document.querySelector('[data-id="trOut"] label span').textContent = img ? 'Duration' : 'Trim end';
-  setR('spd', Math.round(c.speed * 100));
-  setR('cvol', c.vol);
-  $('cvol').disabled = img;
-  $('trType').value = c.tr.type;
-  setR('trDur', c.tr.dur);
-}
-function afterTimingChange(c, jumpTo) {
-  compute();
-  if (!S.playing && jumpTo !== undefined) S.t = clamp(jumpTo, 0, S.total);
-  refreshMedia(); refreshAnim(); updateTime(); drawTimeline();
-}
-$('trIn').oninput = e => {
-  const c = selClip(); if (!c) return;
-  touch('trIn');
-  c.in = Math.min(+e.target.value, c.out - 0.1);
-  afterTimingChange(c, c.start);
-};
-$('trOut').oninput = e => {
-  const c = selClip(); if (!c) return;
-  touch('trOut');
-  c.out = Math.max(+e.target.value, c.in + 0.1);
-  afterTimingChange(c, undefined);
-  if (!S.playing) { S.t = clamp(c.end - 0.05, 0, S.total); updateTime(); drawTimeline(); }
-};
-$('spd').oninput = e => {
-  const c = selClip(); if (!c || c.type === 'image') return;
-  touch('spd');
-  c.speed = (+e.target.value) / 100;
-  afterTimingChange(c);
-};
-$('cvol').oninput = e => { const c = selClip(); if (!c) return; touch('cvol'); c.vol = +e.target.value; };
-$('trType').onchange = e => {
-  const c = selClip(); if (!c) return;
-  touch('trType' + nid());
-  c.tr.type = e.target.value;
-  afterTimingChange(c);
-};
-$('trDur').oninput = e => {
-  const c = selClip(); if (!c) return;
-  touch('trDur');
-  c.tr.dur = +e.target.value;
-  afterTimingChange(c);
-};
-
-$('bSplit').onclick = () => {
-  let c = selClip();
-  const t = S.t;
-  if (!c || !(t > c.start + 0.1 && t < c.end - 0.1)) {
-    c = S.clips.find(k => t > k.start + 0.1 && t < k.end - 0.1) || null;
-  }
-  if (!c) return toast('Move the playhead inside a clip to split it');
-  touch('split' + nid());
-  const lt = t - c.start;
-  const srcT = c.in + lt * c.speed;
-  const b = dupClip(c);
-  b.name = c.name;
-  b.in = srcT;
-  b.tr = { type: 'none', dur: 0.5 };
-  if (c.kf.length) {
-    const mid = evalProps(c, lt);
-    b.kf = [{ t: 0, ...mid }, ...c.kf.filter(k => k.t > lt + 0.01).map(k => ({ ...k, t: k.t - lt }))];
-    c.kf = [...c.kf.filter(k => k.t < lt - 0.01), { t: lt, ...mid }];
-  }
-  c.out = srcT;
-  S.clips.splice(S.clips.indexOf(c) + 1, 0, b);
-  S.sel = b.id;
-  compute();
-  refreshAll();
-};
-function dupClip(c) {
-  const n = cloneClip(c);
-  n.id = nid();
-  n.src = null; n.gain = null;
-  if (c.type === 'video') {
-    const el = document.createElement('video');
-    el.playsInline = true; el.preload = 'auto'; el.src = c.el.src;
-    n.el = el;
-    wire(n);
-  }
-  return n;
-}
-$('bDup').onclick = () => {
-  const c = selClip(); if (!c) return;
-  touch('dup' + nid());
-  const n = dupClip(c);
-  n.tr = { type: 'none', dur: 0.5 };
-  S.clips.splice(S.clips.indexOf(c) + 1, 0, n);
-  S.sel = n.id;
-  compute(); refreshAll();
-};
-$('bDel').onclick = () => {
-  const c = selClip(); if (!c) return;
-  touch('del' + nid());
-  const i = S.clips.indexOf(c);
-  if (c.type === 'video') c.el.pause();
-  S.clips.splice(i, 1);
-  S.sel = S.clips.length ? S.clips[Math.min(i, S.clips.length - 1)].id : -1;
-  compute();
-  S.t = clamp(S.t, 0, S.total);
-  refreshAll();
-};
-function moveClip(dir) {
-  const c = selClip(); if (!c) return;
-  const i = S.clips.indexOf(c), j = i + dir;
-  if (j < 0 || j >= S.clips.length) return;
-  touch('move' + nid());
-  S.clips.splice(i, 1);
-  S.clips.splice(j, 0, c);
-  compute();
-  refreshAll();
-}
-$('bLeft').onclick = () => moveClip(-1);
-$('bRight').onclick = () => moveClip(1);
-
-/* ---------- Adjust tab ---------- */
-function refreshAdjust() {
-  const c = selClip();
-  $('n-adjust').classList.toggle('off', !c);
-  if (!c) return;
-  $('fPreset').value = c.f.preset;
-  setR('fb', c.f.b); setR('fc', c.f.c); setR('fs', c.f.s); setR('fh', c.f.h); setR('fbl', c.f.bl);
-  $('fFit').value = c.fit;
-}
-$('fPreset').onchange = e => { const c = selClip(); if (!c) return; touch('fp' + nid()); c.f.preset = e.target.value; };
-[['fb', 'b'], ['fc', 'c'], ['fs', 's'], ['fh', 'h'], ['fbl', 'bl']].forEach(([id, k]) => {
-  $(id).oninput = e => { const c = selClip(); if (!c) return; touch('f' + id); c.f[k] = +e.target.value; };
-});
-$('fFit').onchange = e => { const c = selClip(); if (!c) return; touch('fit' + nid()); c.fit = e.target.value; };
-$('fAll').onclick = () => {
-  const c = selClip(); if (!c) return;
-  touch('fall' + nid());
-  S.clips.forEach(k => { k.f = { ...c.f }; k.fit = c.fit; });
-  toast('Look applied to all clips');
-};
-$('fReset').onclick = () => {
-  const c = selClip(); if (!c) return;
-  touch('freset' + nid());
-  c.f = defFilter();
-  refreshAdjust();
-};
-
-/* ---------- Animate tab ---------- */
-function refreshAnim() {
-  const c = selClip();
-  $('n-animate').classList.toggle('off', !c);
-  if (!c) { $('kList').innerHTML = ''; return; }
-  if (S.playing) return;
-  const p = evalProps(c, clamp(S.t - c.start, 0, len(c)));
-  PK.forEach(k => setR(k, Math.round(p[k])));
-  const box = $('kList');
-  box.innerHTML = '';
-  if (!c.kf.length) { box.textContent = 'No keyframes yet.'; return; }
-  c.kf.forEach(k => {
-    const b = document.createElement('button');
-    b.textContent = '◆ ' + k.t.toFixed(1) + 's';
-    b.onclick = () => seek(c.start + k.t);
-    box.appendChild(b);
-  });
-}
-PK.forEach(k => {
-  $(k).oninput = e => {
-    const c = selClip(); if (!c) return;
-    touch('p' + k);
-    applyProps(c, { [k]: +e.target.value });
+  keyCv.onclick = ev => {
+    const tpl = keyTpl(), h = hit(keyCv, ev, tpl); if (!h) return;
+    const q = String(h[0] + 1);
+    if (keyState.answers[q] === h[1]) delete keyState.answers[q]; else keyState.answers[q] = h[1];
+    renderKey();
   };
-});
-$('kAdd').onclick = () => {
-  const c = selClip(); if (!c) return;
-  touch('kadd' + nid());
-  const lt = clamp(S.t - c.start, 0, len(c));
-  upsertKf(c, lt, evalProps(c, lt));
-  refreshAnim(); drawTimeline();
-};
-$('kDel').onclick = () => {
-  const c = selClip(); if (!c) return;
-  const lt = S.t - c.start;
-  const i = c.kf.findIndex(k => Math.abs(k.t - lt) < 0.15);
-  if (i < 0) return toast('No keyframe at the playhead');
-  touch('kdel' + nid());
-  const rest = c.kf.filter((_, j) => j !== i);
-  if (!rest.length) Object.assign(c, pickP(c.kf[i]));
-  c.kf = rest;
-  refreshAnim(); drawTimeline();
-};
-function kenBurns(zoomIn) {
-  const c = selClip(); if (!c) return;
-  touch('kb' + nid());
-  const L = len(c);
-  c.kf = [
-    { t: 0, sc: zoomIn ? 100 : 125, px: zoomIn ? 0 : 3, py: 0, rot: 0, op: 100 },
-    { t: L, sc: zoomIn ? 125 : 100, px: zoomIn ? 3 : 0, py: 0, rot: 0, op: 100 }
-  ];
-  refreshAnim(); drawTimeline();
-}
-$('kIn').onclick = () => kenBurns(true);
-$('kOut').onclick = () => kenBurns(false);
-$('kClear').onclick = () => {
-  const c = selClip(); if (!c || !c.kf.length) return;
-  touch('kclr' + nid());
-  Object.assign(c, pickP(evalProps(c, clamp(S.t - c.start, 0, len(c)))));
-  c.kf = [];
-  refreshAnim(); drawTimeline();
-};
-$('kReset').onclick = () => {
-  const c = selClip(); if (!c) return;
-  touch('kres' + nid());
-  c.kf = [];
-  Object.assign(c, { sc: 100, px: 0, py: 0, rot: 0, op: 100 });
-  refreshAnim(); drawTimeline();
-};
-
-/* ---------- Text tab ---------- */
-const TEMPLATES = {
-  title: { text: 'YOUR TITLE', size: 120, x: 0.5, y: 0.45, color: '#ffffff', bgOn: false, bg: '#000000', anim: 'pop', bold: true, len: 3 },
-  lower: { text: 'Name · Role', size: 46, x: 0.36, y: 0.82, color: '#ffffff', bgOn: true, bg: '#7a5cff', anim: 'left', bold: true, len: 4 },
-  cta: { text: 'SUBSCRIBE', size: 64, x: 0.5, y: 0.86, color: '#ffffff', bgOn: true, bg: '#e53935', anim: 'pop', bold: true, len: 3 },
-  type: { text: 'Type your message here...', size: 50, x: 0.5, y: 0.8, color: '#ffffff', bgOn: true, bg: '#111111', anim: 'type', bold: false, len: 4 },
-  caption: { text: 'Caption text', size: 52, x: 0.5, y: 0.86, color: '#ffffff', bgOn: false, bg: '#000000', anim: 'fade', bold: true, len: 3 }
-};
-function newText(o) {
-  const from = +S.t.toFixed(1);
-  return { id: nid(), text: 'New text', x: 0.5, y: 0.5, size: 64, color: '#ffffff', bgOn: false, bg: '#7a5cff', anim: 'none', bold: true, from, to: +(from + (o.len || 3)).toFixed(1), ...o, len: undefined };
-}
-function refreshText() {
-  const sel = $('tSel');
-  sel.innerHTML = '';
-  S.texts.forEach((L, i) => {
-    const o = document.createElement('option');
-    o.value = L.id;
-    o.textContent = (i + 1) + '. ' + L.text.slice(0, 24);
-    sel.appendChild(o);
-  });
-  const L = selText();
-  $('n-text').classList.toggle('off', !L);
-  sel.style.display = S.texts.length ? '' : 'none';
-  if (!L) return;
-  sel.value = L.id;
-  $('tText').value = L.text;
-  setR('tSize', L.size);
-  $('tColor').value = L.color; $('tBg').value = L.bg;
-  $('tBgOn').checked = L.bgOn; $('tBold').checked = L.bold;
-  $('tAnim').value = L.anim;
-  $('tFrom').value = L.from; $('tTo').value = L.to;
-}
-document.querySelectorAll('[data-tpl]').forEach(b => {
-  b.onclick = () => {
-    touch('tpl' + nid());
-    const L = newText(TEMPLATES[b.dataset.tpl]);
-    S.texts.push(L);
-    S.tsel = L.id;
-    refreshAll();
+  $('#keySel').onchange = () => {
+    const id = $('#keySel').value;
+    keyState = id && keys[id] ? { id, tplId: keys[id].tplId, answers: Object.assign({}, keys[id].answers) } : { id: '', tplId: $('#keyTpl').value || 'builtin', answers: {} };
+    $('#keyName').value = id ? keys[id].name : ''; fillSelects(); renderKey();
   };
-});
-$('tAdd').onclick = () => {
-  touch('tadd' + nid());
-  const L = newText({});
-  S.texts.push(L); S.tsel = L.id;
-  refreshAll();
-};
-$('tDup').onclick = () => {
-  const L = selText(); if (!L) return;
-  touch('tdup' + nid());
-  const n = { ...L, id: nid(), y: Math.min(0.95, L.y + 0.08), _box: null };
-  S.texts.push(n); S.tsel = n.id;
-  refreshAll();
-};
-$('tDel').onclick = () => {
-  const L = selText(); if (!L) return;
-  touch('tdel' + nid());
-  S.texts = S.texts.filter(t => t.id !== L.id);
-  S.tsel = S.texts.length ? S.texts[S.texts.length - 1].id : -1;
-  refreshAll();
-};
-$('tSel').onchange = e => { S.tsel = +e.target.value; refreshText(); drawTimeline(); };
-function editText(fn, key) {
-  const L = selText(); if (!L) return;
-  touch(key);
-  fn(L);
-  drawTimeline();
-}
-$('tText').oninput = e => {
-  editText(L => { L.text = e.target.value; }, 'ttext');
-  const L = selText();
-  if (L) { const o = $('tSel').options[S.texts.indexOf(L)]; if (o) o.textContent = (S.texts.indexOf(L) + 1) + '. ' + L.text.slice(0, 24); }
-};
-$('tSize').oninput = e => editText(L => { L.size = +e.target.value; }, 'tsize');
-$('tColor').oninput = e => editText(L => { L.color = e.target.value; }, 'tcolor');
-$('tBg').oninput = e => editText(L => { L.bg = e.target.value; L.bgOn = true; $('tBgOn').checked = true; }, 'tbg');
-$('tBgOn').onchange = e => editText(L => { L.bgOn = e.target.checked; }, 'tbgon' + nid());
-$('tBold').onchange = e => editText(L => { L.bold = e.target.checked; }, 'tbold' + nid());
-$('tAnim').onchange = e => editText(L => { L.anim = e.target.value; }, 'tanim' + nid());
-$('tFrom').oninput = e => editText(L => { L.from = Math.max(0, +e.target.value || 0); if (L.to <= L.from) L.to = L.from + 0.5; }, 'tfrom');
-$('tTo').oninput = e => editText(L => { L.to = Math.max(L.from + 0.1, +e.target.value || 0); }, 'tto');
-$('tNow').onclick = () => {
-  editText(L => { const d = L.to - L.from; L.from = +S.t.toFixed(1); L.to = +(L.from + d).toFixed(1); }, 'tnow' + nid());
-  refreshText();
-};
+  $('#keyTpl').onchange = () => { keyState = { id: '', tplId: $('#keyTpl').value, answers: {} }; renderKey(); };
+  $('#keyClear').onclick = () => { keyState.answers = {}; renderKey(); };
 
-/* ---------- Audio tab ---------- */
-$('addAudio').onchange = e => { addAudio([...e.target.files]); e.target.value = ''; };
-// The rest of the Audio tab (waveform, trim, fades, noise reduction) lives in audio.js
-
-/* ---------- Export tab ---------- */
-const TYPES = window.MediaRecorder ? [
-  'video/mp4;codecs=avc1.42E01E,mp4a.40.2', 'video/mp4',
-  'video/webm;codecs=vp9,opus', 'video/webm;codecs=vp8,opus', 'video/webm'
-].filter(t => MediaRecorder.isTypeSupported(t)) : [];
-TYPES.forEach(t => {
-  const o = document.createElement('option');
-  o.value = t;
-  o.textContent = t.includes('mp4') ? 'MP4' : 'WebM' + (t.includes('vp9') ? ' (VP9)' : t.includes('vp8') ? ' (VP8)' : '');
-  $('xFmt').appendChild(o);
-});
-$('xRatio').onchange = e => { S.ratio = e.target.value; setSize(S.prev); markDirty(); };
-$('xPrev').onchange = e => { S.prev = +e.target.value; setSize(S.prev); };
-$('xBg').oninput = e => { S.bg = e.target.value; markDirty(); };
-$('xLb').onchange = e => { S.letterbox = e.target.checked; markDirty(); };
-$('xVig').onchange = e => { S.vignette = e.target.checked; markDirty(); };
-
-let rec = null, chunks = [], lock = null, cancelled = false;
-async function runRealtime() {
-  if (S.exporting) return;
-  if (!S.clips.length) return toast('Add a clip first');
-  if (!TYPES.length) return toast('Export is not supported in this browser. Use Chrome.');
-  pause();
-  initAudio();
-  await AC.resume();
-  S.exporting = true;
-  cancelled = false;
-  $('busy').classList.add('on');
-  $('busyProg').value = 0;
-  setSize(+$('xRes').value);
-  S.t = 0;
-  render();
-  await sleep(700); // let the first frames load
-  const type = $('xFmt').value;
-  const stream = cv.captureStream(+$('xFps').value);
-  dest.stream.getAudioTracks().forEach(tr => stream.addTrack(tr));
-  try {
-    rec = new MediaRecorder(stream, { mimeType: type, videoBitsPerSecond: +$('xBit').value, audioBitsPerSecond: 128000 });
-  } catch (e) {
-    S.exporting = false; $('busy').classList.remove('on'); setSize(S.prev);
-    return toast('Could not start the recorder: ' + e.message);
+  $('#keySave').onclick = async () => {
+    const msg = $('#keyMsg'); msg.className = 'msg';
+    if (!Object.keys(keyState.answers).length) { msg.textContent = 'Set the answer for at least one question.'; return; }
+    const id = keyState.id || 'k' + Date.now().toString(36) + Math.floor(Math.random() * 1296).toString(36);
+    const name = $('#keyName').value.trim() || 'Answer key ' + (Object.keys(keys).length + 1);
+    keys[id] = { id, name, tplId: keyState.tplId, answers: Object.assign({}, keyState.answers) };
+    keyState.id = id; $('#keyName').value = name; saveKeys(); fillSelects(); renderKey();
+    msg.className = 'msg ok'; msg.textContent = '✔ Saved on this phone — sharing…';
+    const r = await queue('saveKey', { wid: wsId, key: keys[id] }, 'key:' + id);
+    if (r.ok) msg.textContent = '✔ Saved' + (wsId.indexOf('g:') === 0 ? ' and shared with the group.' : '.');
+    else if (r.error === 'offline') msg.textContent = '✔ Saved on this phone. It will be uploaded when the internet is back.';
+    else { msg.className = 'msg'; msg.textContent = 'Saved on this phone, but the server said: ' + r.error; }
+  };
+  $('#keyDel').onclick = () => {
+    const id = keyState.id;
+    if (!id) { $('#keyMsg').className = 'msg'; $('#keyMsg').textContent = 'Select a saved answer key first.'; return; }
+    if (!confirm('Delete this answer key?' + (wsId.indexOf('g:') === 0 ? ' It will be deleted for the whole group.' : ''))) return;
+    delete keys[id]; saveKeys(); keyState = { id: '', tplId: 'builtin', answers: {} }; $('#keyName').value = '';
+    fillSelects(); renderKey(); queue('deleteKey', { wid: wsId, id }, 'key:' + id);
+  };
+  function download(blob, name) {
+    const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = name;
+    document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(a.href), 4000);
   }
-  chunks = [];
-  rec.ondataavailable = e => { if (e.data && e.data.size) chunks.push(e.data); };
-  rec.onstop = () => exportDone(type);
-  rec.start(500);
-  try { lock = await navigator.wakeLock.request('screen'); } catch (e) { }
-  S.t = 0;
-  await play();
-}
-function finishExport() {
-  pause();
-  setTimeout(() => { if (rec && rec.state !== 'inactive') rec.stop(); }, 300);
-}
-function exportDone(type) {
-  S.exporting = false;
-  $('busy').classList.remove('on');
-  if (lock) { lock.release().catch(() => { }); lock = null; }
-  setSize(S.prev);
-  S.t = 0;
-  pauseAllMedia();
-  if (cancelled) return toast('Export cancelled');
-  const mime = type.split(';')[0];
-  presentExport(new Blob(chunks, { type: mime }), mime);
-}
-function presentExport(blob, mime) {
-  const url = URL.createObjectURL(blob);
-  const ext = mime.includes('mp4') ? 'mp4' : 'webm';
-  $('xOut').src = url;
-  $('xOut').style.display = 'block';
-  $('xDl').href = url;
-  $('xDl').download = 'vided-export.' + ext;
-  $('xDl').style.display = 'block';
-  const file = new File([blob], 'vided-export.' + ext, { type: mime });
-  if (navigator.canShare && navigator.canShare({ files: [file] })) {
-    $('xShare').style.display = 'block';
-    $('xShare').onclick = () => navigator.share({ files: [file], title: 'Vided export' }).catch(() => { });
+  $('#sheetDl').onclick = () => {
+    const cv = document.createElement('canvas'); cv.width = C.W * 2; cv.height = C.H * 2;
+    const cx = cv.getContext('2d'); cx.scale(2, 2); drawBuiltinSheet(cx);
+    cv.toBlob(b => download(b, 'omr-sheet.png'), 'image/png');
+  };
+
+  // ---------- scan tab ----------
+  const scanCv = $('#scanCv');
+  const smsg = (t, ok) => { const m = $('#scanMsg'); m.textContent = t; m.className = 'msg' + (ok ? ' ok' : ''); };
+  $('#camBtn').onclick = () => $('#camIn').click();
+  $('#galBtn').onclick = () => $('#galIn').click();
+  $('#camIn').onchange = $('#galIn').onchange = e => { const f = e.target.files[0]; e.target.value = ''; if (f) handleFile(f); };
+  const scanTplObj = () => { const k = keys[$('#scanKey').value]; return k ? getTpl(k.tplId) : null; };
+
+  async function handleFile(file) {
+    const key = keys[$('#scanKey').value];
+    if (!key) { smsg('Choose an answer key first (create one in the Answer Key tab).'); return; }
+    if (!getTpl(key.tplId)) { smsg('This answer key uses a sheet type that is not on this device. Open the Settings tab and refresh from the server, or re-create the sheet type.'); return; }
+    smsg('Scanning…', true);
+    try { const p = await loadPhoto(file, 2200); sc = { photo: p, rot: undefined, pts: null, manual: new Set(), rid: null }; setTimeout(runScan, 30); }
+    catch (e) { smsg('Error: ' + e.message); }
   }
-  openTab('export');
-  toast('Export finished (' + (blob.size / 1048576).toFixed(1) + ' MB)');
-  updateTime(); drawTimeline();
-}
-$('xBtn').onclick = () => doExport();
-$('goExport').onclick = () => openTab('export');
-$('busyCancel').onclick = () => {
-  cancelled = true;
-  pause();
-  if (rec && rec.state !== 'inactive') rec.stop();
-};
-
-/* ---------- tabs ---------- */
-function openTab(name) {
-  document.querySelectorAll('#tabs button').forEach(b => b.classList.toggle('active', b.dataset.tab === name));
-  document.querySelectorAll('.panel').forEach(p => p.classList.toggle('active', p.id === 'p-' + name));
-  $('panels').scrollTop = 0;
-}
-document.querySelectorAll('#tabs button').forEach(b => { b.onclick = () => openTab(b.dataset.tab); });
-
-/* ---------- direct manipulation on the preview ---------- */
-let drag = null;
-function cpt(e) {
-  const r = cv.getBoundingClientRect();
-  return [(e.clientX - r.left) * cv.width / r.width, (e.clientY - r.top) * cv.height / r.height];
-}
-function pickClip() {
-  const t = Math.min(S.t, Math.max(0, S.total - 0.001));
-  const act = frameState(t).map(s => s.c);
-  const cur = selClip();
-  if (cur && act.includes(cur)) return cur;
-  return act[act.length - 1] || null;
-}
-cv.addEventListener('pointerdown', e => {
-  if (S.exporting) return;
-  const [x, y] = cpt(e);
-  if (S.pick && window.pickKeyColor) { pickKeyColor(x, y); return; }
-  for (let i = S.texts.length - 1; i >= 0; i--) {
-    const L = S.texts[i], b = L._box;
-    if (b && x >= b.x && x <= b.x + b.w && y >= b.y && y <= b.y + b.h) {
-      touch('tdrag' + nid());
-      S.tsel = L.id;
-      drag = { kind: 'text', L, ox: x - L.x * cv.width, oy: y - L.y * cv.height, moved: false };
-      cv.setPointerCapture(e.pointerId);
-      refreshText(); drawTimeline();
+  // An older sheet type that was saved without the corner-square positions: after one good manual alignment,
+  // find the squares in this photo, express them in template coordinates and keep them, so the next scan lines up by itself.
+  function learnMarkers(tpl, p, r) {
+    try {
+      if (tpl.builtin || tpl.mk || r.how !== 'manual' || !(r.fit >= 0.25)) return;
+      const m = OMR.findMarkers(OMR.toGray(p.rgba, p.w, p.h), p.w, p.h);
+      const Hi = OMR.homography(r.quad, tpl.ref);
+      if (!m || !Hi) return;
+      const ap = q => { const d = Hi[6] * q[0] + Hi[7] * q[1] + 1; return [(Hi[0] * q[0] + Hi[1] * q[1] + Hi[2]) / d, (Hi[3] * q[0] + Hi[4] * q[1] + Hi[5]) / d]; };
+      const t = OMR.orderQuad(m.map(ap)), W = tpl.W, H = tpl.H;
+      if (t.some(q => q[0] < -0.35 * W || q[0] > 1.35 * W || q[1] < -0.35 * H || q[1] > 1.35 * H)) return;
+      let ar = 0; for (let i = 0; i < 4; i++) { const u = t[i], v = t[(i + 1) % 4]; ar += u[0] * v[1] - v[0] * u[1]; }
+      if (Math.abs(ar) / 2 < 0.5 * W * H) return;
+      tpl.mk = t; if (tpl.align !== 'page') tpl.align = 'markers';
+      if (saveTpls()) setTimeout(() => smsg('✔ Corner squares learned for this sheet type — next time the photo will line up automatically.', true), 50);
+    } catch (e) { /* ignore */ }
+  }
+  function runScan() {
+    const tpl = scanTplObj(), p = sc.photo;
+    const r = OMR.scanTpl(p.rgba, p.w, p.h, tpl, { pts: sc.pts || undefined, rot: sc.pts ? undefined : sc.rot });
+    if (!r.found) {
+      smsg('Could not find the sheet corners automatically. Place the four handles on the sheet corners.');
+      const quad = sc.lastQuad || insetQuad(p.w, p.h);
+      openCorners(p, quad, cornerHint(tpl), pts => { sc.pts = pts; sc.lastQuad = pts; runScan(); });
       return;
     }
+    if (r.learned && !tpl.builtin) { tpl.mk = r.learned; tpl.align = 'markers'; if (saveTpls()) setTimeout(() => smsg('✔ Corner squares learned for this sheet type — scanning now lines up automatically.', true), 50); }
+    else learnMarkers(tpl, p, r);
+    sc.rot = r.rot; sc.res = r; sc.lastQuad = r.quad; const A = OMR.analyze(r.dark, r.fill, { thr: S.thr, fillMin: (S.fillPct || 70) / 100 }, r.raw);
+    sc.sel = A.sel; sc.bad = new Set(); A.bad.forEach((b, q) => { if (b) sc.bad.add(q); }); sc.manual = new Set();
+    sc.img = new ImageData(r.warped, tpl.W, tpl.H);
+    submitted = false; $('#resBox').hidden = true; scanCv.width = tpl.W; scanCv.height = tpl.H;
+    $('#scanArea').hidden = false; updateTimerBtn(); renderScan();
+    const n = sc.sel.filter(s => s.length).length, nb = sc.bad.size;
+    if (r.fit < 0.1) smsg('⚠ The sheet does not seem to line up with the template (alignment ' + r.fit.toFixed(2) + '). Try “Adjust corners” or “Rotate”, or retake the photo.');
+    else if (r.ambiguous) smsg('✔ Scanned (' + n + ' questions marked). Orientation was hard to tell — if the circles look wrong, tap “Rotate”.', true);
+    else if (n < 3) smsg('⚠ Very few marks detected. Check the sheet type and orientation (“Rotate”), lighting, or lower the detection threshold in Settings.');
+    else if (nb) smsg('✔ Scan complete — ' + n + ' questions have marks. ⚠ ' + nb + ' question(s) have multiple or partly filled marks (orange) and will count as wrong. Tap a bubble to correct it, then Submit.', true);
+    else smsg('✔ Scan complete — ' + n + ' questions have marks. Fix any bubble by tapping it, then Submit.', true);
+    $('#scanWrap').scrollIntoView({ behavior: 'smooth', block: 'start' });
   }
-  const c = pickClip();
-  if (c) {
-    S.sel = c.id;
-    drag = { kind: 'clip', c, sx: x, sy: y, p0: evalProps(c, clamp(S.t - c.start, 0, len(c))), moved: false, touched: false };
-    cv.setPointerCapture(e.pointerId);
-    refreshAll();
+  $('#rotBtn').onclick = () => { if (sc.photo) { sc.pts = null; sc.rot = ((sc.rot || 0) + 1) % 4; runScan(); } };
+  $('#cornBtn').onclick = () => {
+    if (!sc.photo) return; const tpl = scanTplObj();
+    openCorners(sc.photo, sc.lastQuad || insetQuad(sc.photo.w, sc.photo.h), cornerHint(tpl), pts => { sc.pts = pts; sc.lastQuad = pts; runScan(); });
+  };
+  function renderScan() {
+    const tpl = scanTplObj(), x = scanCv.getContext('2d'); x.putImageData(sc.img, 0, 0);
+    const key = submitted ? keys[$('#scanKey').value] : null;
+    for (let q = 0; q < tpl.groups.length; q++) {
+      const s = sc.sel[q] || [], a = key ? key.answers[q + 1] : undefined, g = tpl.groups[q];
+      s.forEach(o => {
+        let f = 'rgba(96,165,250,.40)', st = '#2563eb';
+        if (sc.bad.has(q)) { f = 'rgba(251,191,36,.45)'; st = '#d97706'; }
+        if (key && a !== undefined) {
+          if (!sc.bad.has(q) && s.length === 1 && o === a) { f = 'rgba(74,222,128,.45)'; st = '#16a34a'; } else { f = 'rgba(248,113,113,.45)'; st = '#dc2626'; }
+        }
+        ell(x, tpl, g.pts[o], f, st, sc.manual.has(q + '-' + o));
+      });
+      if (key && a !== undefined && g.pts[a] && !(!sc.bad.has(q) && s.length === 1 && s[0] === a)) ell(x, tpl, g.pts[a], null, '#16a34a', true);
+    }
   }
-});
-cv.addEventListener('pointermove', e => {
-  if (!drag) return;
-  const [x, y] = cpt(e);
-  if (drag.kind === 'text') {
-    drag.moved = true;
-    drag.L.x = clamp((x - drag.ox) / cv.width, 0, 1);
-    drag.L.y = clamp((y - drag.oy) / cv.height, 0, 1);
-  } else {
-    if (!drag.moved && Math.hypot(x - drag.sx, y - drag.sy) < 6 * cv.width / 360) return;
-    if (!drag.touched) { touch('cdrag' + nid()); drag.touched = true; }
-    drag.moved = true;
-    applyProps(drag.c, { px: drag.p0.px + (x - drag.sx) / cv.width * 100, py: drag.p0.py + (y - drag.sy) / cv.height * 100 });
+  scanCv.onclick = ev => {
+    if (!sc.sel) return; const tpl = scanTplObj(), h = hit(scanCv, ev, tpl); if (!h) return;
+    const s = sc.sel[h[0]], i = s.indexOf(h[1]), k = h[0] + '-' + h[1];
+    sc.bad.delete(h[0]); // the person has checked this question by hand
+    if (i >= 0) { s.splice(i, 1); sc.manual.delete(k); } else { s.push(h[1]); sc.manual.add(k); }
+    renderScan(); refreshResult();
+  };
+
+  // ---------- scoring ----------
+  function updateTimerBtn() {
+    const b = $('#timerBtn'); b.textContent = '⏱ Second Timer (−' + fmt(S.timerPct) + '%)' + (timerOn ? ' ✔' : ''); b.classList.toggle('on', timerOn);
   }
-});
-function endDrag() {
-  if (!drag) return;
-  const d = drag;
-  drag = null;
-  if (d.kind === 'text' && !d.moved) openTab('text');
-  refreshAnim();
-}
-cv.addEventListener('pointerup', endDrag);
-cv.addEventListener('pointercancel', endDrag);
+  $('#timerBtn').onclick = () => { timerOn = !timerOn; updateTimerBtn(); refreshResult(); };
+  $('#scanKey').onchange = () => { if ($('#scanArea').hidden === false) { $('#scanArea').hidden = true; sc = { sel: null }; submitted = false; } };
 
-/* ---------- refresh everything ---------- */
-function refreshAll() {
-  refreshMedia(); refreshAdjust(); refreshAnim(); refreshText();
-  if (window.refreshAudio) refreshAudio();
-  if (window.refreshCaps) refreshCaps();
-  if (window.refreshCutout) refreshCutout();
-  $('empty').style.display = S.clips.length ? 'none' : 'flex';
-  updateTime(); drawTimeline(); updUR();
-}
+  function compute(sel, key, tOn, bad) {
+    let c = 0, w = 0, b = 0; const wrongQs = [], qs = Object.keys(key.answers).map(Number).sort((a, z) => a - z);
+    qs.forEach(q => {
+      const s = sel[q - 1] || [];
+      if (bad && bad.has(q - 1)) { w++; wrongQs.push(q); }
+      else if (!s.length) b++; else if (s.length === 1 && s[0] === key.answers[q]) c++; else { w++; wrongQs.push(q); }
+    });
+    const total = qs.length * S.per, neg = w * S.neg, tim = tOn ? total * S.timerPct / 100 : 0;
+    return { c, w, b, n: qs.length, total, neg, tim, fin: Math.max(0, c * S.per - neg - tim), wrongQs };
+  }
+  function showResult(r) {
+    $('#rC').textContent = r.c; $('#rW').textContent = r.w; $('#rB').textContent = r.b;
+    $('#rM').textContent = fmt(r.total); $('#rN').textContent = '− ' + fmt(r.neg);
+    $('#rT').textContent = timerOn ? '− ' + fmt(r.tim) : '0';
+    $('#rF').textContent = fmt(r.fin) + ' / ' + fmt(r.total);
+    $('#rS').textContent = '+' + fmt(S.per) + ' per correct, −' + fmt(S.neg) + ' per wrong (multiple or partly filled marks count as wrong)';
+    $('#resBox').hidden = false;
+  }
+  let syncT = null;
+  function refreshResult() {
+    if (!submitted) return; const key = keys[$('#scanKey').value]; if (!key) return;
+    renderScan(); showResult(compute(sc.sel, key, timerOn, sc.bad)); storeRecord();
+  }
+  const stuNow = () => sc.stu || { name: $('#stuName').value.trim(), id: $('#stuId').value.trim() };
+  const onStu = () => { if (submitted && sc.sel) { sc.stu = { name: $('#stuName').value.trim(), id: $('#stuId').value.trim() }; storeRecord(); } };
+  $('#stuName').oninput = onStu; $('#stuId').oninput = onStu;
+  function storeRecord() {
+    const key = keys[$('#scanKey').value], r = compute(sc.sel, key, timerOn, sc.bad);
+    const rec = Object.assign({ id: sc.rid, t: Date.now(), keyId: key.id, keyName: key.name, student: stuNow().name || 'Unknown', sid: stuNow().id, sel: sc.sel.map(s => s.slice()), bad: Array.from(sc.bad || []), timer: timerOn }, r);
+    const i = results.findIndex(x => x.id === rec.id);
+    if (i >= 0) { rec.t = results[i].t; results[i] = rec; } else results.unshift(rec);
+    saveResults(); clearTimeout(syncT); syncT = setTimeout(() => queue('saveResult', { wid: wsId, result: rec }, 'res:' + rec.id), 600);
+  }
+  $('#submitBtn').onclick = () => {
+    if (!sc.sel) return; if (!keys[$('#scanKey').value]) { smsg('Choose an answer key.'); return; }
+    if (!sc.rid) sc.rid = 'r' + Date.now();
+    sc.stu = { name: $('#stuName').value.trim(), id: $('#stuId').value.trim() };
+    const dup = sc.stu.id && results.some(x => x.keyId === keys[$('#scanKey').value].id && x.sid === sc.stu.id && x.id !== sc.rid);
+    submitted = true; refreshResult(); $('#resBox').scrollIntoView({ behavior: 'smooth', block: 'center' });
+    if (dup) smsg('⚠ Roll/ID ' + sc.stu.id + ' already has a result for this answer key (duplicate). Delete the older one in Results if it is a mistake.');
+  };
+  $('#nextBtn').onclick = () => {
+    $('#scanArea').hidden = true; $('#resBox').hidden = true; sc = { sel: null }; submitted = false;
+    $('#stuName').value = ''; $('#stuId').value = ''; smsg('Ready for the next sheet.', true); window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
+  $('#stuPdf').onclick = () => { const r = results.find(x => x.id === sc.rid); if (r) pdfStudents([r], t => smsg(t, true)); };
 
-$('undo').onclick = undo;
-$('redo').onclick = redo;
-window.addEventListener('resize', () => { fitCanvas(); drawTimeline(); });
-document.addEventListener('visibilitychange', () => { if (document.hidden && S.playing && !S.exporting) pause(); });
+  // ---------- results tab ----------
+  const passPct = () => (S.passPct == null ? 40 : S.passPct);
+  const pctOf = r => (r.total ? r.fin / r.total * 100 : 0);
+  const isFail = r => pctOf(r) < passPct();
+  const p1 = x => String(Math.round(x * 10) / 10);
+  const nameOf = r => r.student || 'Unknown';
+  // Highest marks first; equal marks share the same rank
+  function ranked(keyId) {
+    const L = results.filter(r => r.keyId === keyId).sort((x, y) => y.fin - x.fin || y.c - x.c || x.w - y.w || nameOf(x).localeCompare(nameOf(y)) || x.t - y.t);
+    let rank = 0, prev = null;
+    return L.map((r, i) => { if (prev === null || r.fin !== prev) rank = i + 1; prev = r.fin; return { r, rank, n: L.length }; });
+  }
+  function resKeyIds() {
+    const seen = {}, out = [];
+    results.slice().sort((x, y) => y.t - x.t).forEach(r => { if (!seen[r.keyId]) { seen[r.keyId] = 1; out.push({ id: r.keyId, name: r.keyName }); } });
+    return out;
+  }
+  function selKeyIds() { const v = $('#resKey').value; return v ? [v] : resKeyIds().map(k => k.id); }
+  function fillResKey() {
+    const sel = $('#resKey'), cur = sel.value, ks = resKeyIds();
+    sel.innerHTML = '<option value="">All answer keys</option>' + ks.map(k => `<option value="${esc(k.id)}">${esc(k.name)}</option>`).join('');
+    sel.value = ks.some(k => k.id === cur) ? cur : '';
+  }
+  $('#resKey').onchange = () => renderResults();
+  function renderResults() {
+    fillResKey();
+    const L = $('#resList');
+    if (!results.length) { L.innerHTML = '<p class="hint">No results yet.</p>'; return; }
+    L.innerHTML = selKeyIds().map(kid => {
+      const R = ranked(kid); if (!R.length) return '';
+      const fails = R.filter(x => isFail(x.r)).length;
+      return `<div class="grp">${esc(R[0].r.keyName)} — ${R.length} student(s)${fails ? ', ' + fails + ' below ' + fmt(passPct()) + '%' : ''}</div>` + R.map(({ r, rank }) =>
+        `<div class="item${isFail(r) ? ' fail' : ''}"><div><span class="rk">${rank}</span><b>${esc(nameOf(r))}</b>${r.sid ? ' • ID ' + esc(r.sid) : ''}<small>Correct ${r.c} • Wrong ${r.w} • Blank ${r.b}${r.timer ? ' • Timer penalty' : ''} • ${p1(pctOf(r))}%<br>${esc(new Date(r.t).toLocaleString())}${r.by ? ' • by ' + esc(r.by) : ''}${r.wrongQs && r.wrongQs.length ? '<br>Wrong Q: ' + esc(r.wrongQs.join(', ')) : ''}</small></div>
+        <div style="text-align:right"><b class="ok">${fmt(r.fin)}/${fmt(r.total)}</b><br><button class="b alt sm" data-pdf="${esc(r.id)}">PDF</button> <button class="b red sm" data-del="${esc(r.id)}">Delete</button></div></div>`).join('');
+    }).join('');
+    L.querySelectorAll('[data-del]').forEach(b => b.onclick = () => {
+      if (!confirm('Delete this result?' + (wsId.indexOf('g:') === 0 ? ' It will be deleted for the whole group.' : ''))) return;
+      results = results.filter(r => r.id !== b.dataset.del); saveResults(); renderResults(); queue('deleteResult', { wid: wsId, id: b.dataset.del }, 'res:' + b.dataset.del);
+    });
+    L.querySelectorAll('[data-pdf]').forEach(b => b.onclick = () => { const r = results.find(x => x.id === b.dataset.pdf); if (r) pdfStudents([r], pdfMsg); });
+  }
 
-/* ---------- start ---------- */
-setSize(S.prev);
-refreshAll();
-requestAnimationFrame(loop);
+  // ---------- result sheets: downloadable PDF files ----------
+  function needReport() {
+    return new Promise(res => {
+      if (window.Report) return res(true);
+      const s = document.createElement('script'); s.src = 'report.js'; s.onload = () => res(!!window.Report); s.onerror = () => res(false); document.head.appendChild(s);
+    });
+  }
+  const NO_REPORT = 'The PDF file maker (report.js, part 2) is not installed on the website yet.';
+  const pdfMsg = t => { const m = $('#pdfMsg'); m.textContent = t || ''; };
+  const rowColor = (r, rank) => (isFail(r) ? '#e11d1d' : rank <= 3 ? '#5b8f2a' : '#000');
+  const tick = () => new Promise(r => setTimeout(r, 0));
+  const safeName = s => String(s || '').replace(/[^\w\u0980-\u09FF.-]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 40) || 'file';
+  function answersOf(r) {
+    const key = keys[r.keyId]; if (!key) return null;
+    const tpl = getTpl(key.tplId), lab = (tpl && tpl.labels) || ['A', 'B', 'C', 'D', 'E', 'F'], bad = new Set(r.bad || []), wr = new Set(r.wrongQs || []);
+    return Object.keys(key.answers).map(Number).sort((x, y) => x - y).map(q => {
+      const s = (r.sel && r.sel[q - 1]) || [];
+      return { q, mine: s.length ? s.map(i => lab[i] || i + 1).join('+') : '–', good: lab[key.answers[q]] || key.answers[q], wrong: wr.has(q), multi: bad.has(q - 1), answered: s.length > 0 };
+    });
+  }
+  async function pdfMerit(msg) {
+    const ids = selKeyIds().filter(k => ranked(k).length); if (!ids.length) { alert('No results to put in the PDF.'); return; }
+    if (!(await needReport())) { msg(NO_REPORT); return; }
+    msg('Creating PDF…'); const logo = await Report.loadImage(WLOGO), doc = new Report.Doc();
+    for (const kid of ids) {
+      const R = ranked(kid); await tick();
+      Report.merit({ header: WSS.header, logo, caption: R[0].r.keyName, rows: R.map(({ r, rank }) => ({ rank, id: r.sid || '', name: nameOf(r), pos: r.c, neg: r.w, total: r.fin, color: rowColor(r, rank) })) }, c => doc.add(c));
+    }
+    download(doc.blob(), 'Merit-list' + (ids.length === 1 ? '-' + safeName(ranked(ids[0])[0].r.keyName) : '') + '.pdf');
+    msg('✔ PDF downloaded (' + doc.pages() + ' page' + (doc.pages() > 1 ? 's' : '') + ').');
+  }
+  async function pdfStudents(list, msg) {
+    if (!list.length) { alert('No results to put in the PDF.'); return; }
+    if (!(await needReport())) { msg(NO_REPORT); return; }
+    msg('Creating PDF…'); const logo = await Report.loadImage(WLOGO), doc = new Report.Doc();
+    for (let i = 0; i < list.length; i++) {
+      const r = list[i], me = ranked(r.keyId).find(x => x.r.id === r.id), rank = me ? me.rank : 1, f = isFail(r), col = rowColor(r, rank);
+      const lines = [
+        { t: 'Merit position: ' + rank + ' of ' + (me ? me.n : 1), color: col, bold: true },
+        { t: f ? 'Result: Below the pass mark (' + fmt(passPct()) + '%)' : 'Result: Passed', color: f ? '#e11d1d' : '#000', bold: true },
+        { t: 'Marks: ' + fmt(r.fin) + ' / ' + fmt(r.total) + '  (' + p1(pctOf(r)) + '%)', color: col },
+        { t: 'Correct ' + r.c + '     Wrong ' + r.w + '     Unanswered ' + r.b },
+        { t: 'Wrong-answer penalty: − ' + fmt(r.neg) + (r.timer ? '     Second Timer penalty: − ' + fmt(r.tim) : '') }
+      ];
+      await tick(); msg('Creating PDF… ' + (i + 1) + ' / ' + list.length);
+      Report.student({ header: WSS.header, logo, caption: r.keyName, row: { rank, id: r.sid || '', name: nameOf(r), pos: r.c, neg: r.w, total: r.fin, color: col }, lines, answers: answersOf(r) }, c => doc.add(c));
+    }
+    download(doc.blob(), (list.length === 1 ? 'Result-' + safeName(list[0].sid || list[0].student) : 'All-results') + '.pdf');
+    msg('✔ PDF downloaded (' + doc.pages() + ' page' + (doc.pages() > 1 ? 's' : '') + ').');
+  }
+  $('#pdfAll').onclick = () => pdfMerit(pdfMsg);
+  $('#pdfEach').onclick = () => { const all = []; selKeyIds().forEach(kid => ranked(kid).forEach(x => all.push(x.r))); pdfStudents(all, pdfMsg); };
+  $('#resCsv').onclick = () => {
+    const q = v => '"' + String(v).replace(/"/g, '""') + '"';
+    const rows = [['Rank', 'Name', 'Roll/ID', 'Answer key', 'Time', 'Correct', 'Wrong', 'Unanswered', 'Total marks', 'Wrong penalty', 'Timer penalty', 'Score', 'Percent', 'Status', 'Scanned by', 'Wrong questions']];
+    selKeyIds().forEach(kid => ranked(kid).forEach(({ r, rank }) => rows.push([rank, nameOf(r), r.sid || '', r.keyName, new Date(r.t).toLocaleString(), r.c, r.w, r.b, r.total, r.neg, r.tim, r.fin, p1(pctOf(r)), isFail(r) ? 'Below pass mark' : 'Pass', r.by || '', (r.wrongQs || []).join(' ')])));
+    download(new Blob(['\ufeff' + rows.map(r => r.map(q).join(',')).join('\n')], { type: 'text/csv;charset=utf-8' }), 'omr-results.csv');
+  };
+  $('#resSync').onclick = async () => { await pullWs(true); renderResults(); };
 
-// Small hook so automated tests can inspect the app. Harmless in normal use.
-window.__vided = { S, compute, render, frameState, evalProps, undo, redo, addMedia, makeClip };
+  // ---------- sheet types (templates) ----------
+  function renderTplList() {
+    $('#tplList').innerHTML = allTpls().map(t => {
+      const ks = {}; t.groups.forEach(g => ks[g.pts.length] = (ks[g.pts.length] || 0) + 1);
+      const opt = Object.keys(ks).map(k => ks[k] + '×' + k).join(', ');
+      return `<div class="item"><div><b>${esc(t.name)}</b><small>${t.groups.length} questions • options: ${opt} • alignment: ${esc(t.align)}</small></div>
+      ${t.builtin || !canUp() || !(isAdmin() || !t.by || t.by === A.user.id) ? '' : `<button class="b red sm" data-dt="${esc(t.id)}">Delete</button>`}</div>`;
+    }).join('');
+    document.querySelectorAll('[data-dt]').forEach(b => b.onclick = () => {
+      const id = b.dataset.dt;
+      if (Object.keys(keys).some(k => keys[k].tplId === id)) { alert('Delete the answer keys that use this sheet type first.'); return; }
+      if (!confirm('Delete this sheet type for everyone?')) return;
+      customTpls = customTpls.filter(t => t.id !== id); saveTpls(); renderTplList(); fillSelects(); queue('deleteTemplate', { id }, 'tpl:' + id);
+    });
+  }
+
+  // template wizard
+  let wiz = null, wizHist = [];
+  const wmsg = (t, ok) => { const m = $('#wizMsg'); m.textContent = t; m.className = 'msg' + (ok ? ' ok' : ''); };
+  $('#wizCam').onclick = () => $('#wizCamIn').click();
+  $('#wizGal').onclick = () => $('#wizGalIn').click();
+  $('#wizCamIn').onchange = $('#wizGalIn').onchange = async e => {
+    const f = e.target.files[0]; e.target.value = ''; if (!f) return;
+    wmsg('Loading photo…', true);
+    try {
+      const p = await loadPhoto(f, 2200);
+      const a = OMR.alignPhoto(OMR.toGray(p.rgba, p.w, p.h), p.w, p.h, 'auto');
+      wiz = { photo: p, auto: a, pts: a ? a.pts : insetQuad(p.w, p.h), how: a ? a.how : 'manual', sens: 0.85, list: [], rx: 10, ry: 10 };
+      wmsg(a ? 'Found the sheet (' + (a.how === 'markers' ? 'corner squares' : 'paper edges') + '). Check the four corners, then tap Done.' : 'Could not find the sheet automatically — place the four handles on the sheet corners.', true);
+      openCorners(p, wiz.pts, a ? (a.how === 'markers' ? 'Handles should sit on the centres of the black corner squares.' : 'Handles should sit on the four paper corners.') + ' TL = top-left of the SHEET.' : 'Place the handles on the four corners of the sheet. TL = top-left of the SHEET.', pts => {
+        const moved = !wiz.auto || quadMove(pts, wiz.auto.pts) > 4;
+        wiz.pts = pts; wiz.align = moved ? 'manual' : wiz.auto.how; wizBuild(true);
+      });
+    } catch (err) { wmsg('Error: ' + err.message); }
+  };
+  function wizOpts() { return { k: +$('#wK').value || 0, transpose: $('#wDir').value === '1', numbering: $('#wNum').value }; }
+  // Find the black corner squares in the blank photo and express them in template coordinates,
+  // so the scanner can line the sheet up on the squares even if the template corners were placed somewhere else.
+  function wizMarkers() {
+    try {
+      const p = wiz.photo, m = OMR.findMarkers(OMR.toGray(p.rgba, p.w, p.h), p.w, p.h);
+      const Hi = OMR.homography(wiz.pts, wiz.base.ref);
+      if (!m || !Hi) return null;
+      const ap = q => { const d = Hi[6] * q[0] + Hi[7] * q[1] + 1; return [(Hi[0] * q[0] + Hi[1] * q[1] + Hi[2]) / d, (Hi[3] * q[0] + Hi[4] * q[1] + Hi[5]) / d]; };
+      const t = OMR.orderQuad(m.map(ap)), W = wiz.base.W, H = wiz.base.H;
+      if (t.some(q => q[0] < -0.35 * W || q[0] > 1.35 * W || q[1] < -0.35 * H || q[1] > 1.35 * H)) return null;
+      let ar = 0; for (let i = 0; i < 4; i++) { const u = t[i], v = t[(i + 1) % 4]; ar += u[0] * v[1] - v[0] * u[1]; }
+      if (Math.abs(ar) / 2 < 0.5 * W * H) return null;
+      return t;
+    } catch (e) { return null; }
+  }
+  function wizBuild(detect) {
+    const p = wiz.photo;
+    wiz.base = OMR.templateBase(p.rgba, p.w, p.h, wiz.pts, 1200);
+    wiz.mk = wizMarkers();
+    if (!wiz.base) { wmsg('The corners are not valid. Adjust them and try again.'); return; }
+    if (detect) {
+      const det = OMR.detectBubbles(wiz.base.gray, wiz.base.W, wiz.base.H, wiz.sens);
+      wiz.list = det ? det.list.map(b => ({ x: b.x, y: b.y })) : []; wiz.rx = det ? det.rx : wiz.base.W * 0.012; wiz.ry = det ? det.ry : wiz.base.W * 0.012;
+      wizHist = [];
+      $('#wMsg').textContent = det ? '' : 'No bubbles found. Use a clear, well-lit photo of a BLANK sheet, raise the sensitivity, or add bubbles by tapping.';
+    }
+    $('#wizStart').hidden = true; $('#wizEdit').hidden = false; wmsg('');
+    wizRegroup(); $('#wizEdit').scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
+  function wizRegroup() {
+    wiz.groups = wiz.list.length ? OMR.buildGroups(wiz.list, wiz.rx, wiz.ry, wizOpts()) : [];
+    const ks = {}; wiz.groups.forEach(g => ks[g.pts.length] = (ks[g.pts.length] || 0) + 1);
+    const odd = Object.keys(ks).length > 1;
+    $('#wizInfo').textContent = wiz.list.length + ' bubbles → ' + wiz.groups.length + ' questions (' + Object.keys(ks).map(k => ks[k] + '×' + k + ' options').join(', ') + ')' + (odd ? ' ⚠ Questions have different option counts — check for missed/extra bubbles, or set “Options per question”.' : '');
+    wizRender();
+  }
+  function wizRender() {
+    const cv = $('#wizCv'), b = wiz.base; cv.width = b.W; cv.height = b.H;
+    const x = cv.getContext('2d'); x.putImageData(new ImageData(b.warped, b.W, b.H), 0, 0);
+    const lab = $('#wLab').value, name = o => lab === '1' ? String(o + 1) : String.fromCharCode((lab === 'a' ? 97 : 65) + o);
+    const r = Math.max(wiz.rx, wiz.ry);
+    x.lineWidth = 2.5; x.strokeStyle = '#dc2626';
+    wiz.groups.forEach((g, q) => {
+      g.pts.forEach((p, o) => { x.beginPath(); x.ellipse(p[0], p[1], wiz.rx + 3, wiz.ry + 3, 0, 0, 7); x.stroke(); });
+      const a = g.pts[0], w = g.pts[1] || [a[0] + 1, a[1]], vertical = Math.abs(w[1] - a[1]) > Math.abs(w[0] - a[0]);
+      x.font = 'bold ' + Math.round(r * 1.1) + 'px ' + FONT; x.textBaseline = 'middle'; x.lineWidth = 4; x.strokeStyle = '#fff'; x.fillStyle = '#b91c1c';
+      const tx = vertical ? a[0] : a[0] - wiz.rx * 1.6, ty = vertical ? a[1] - wiz.ry * 2.1 : a[1];
+      x.textAlign = vertical ? 'center' : 'right'; x.strokeText(String(q + 1), tx, ty); x.fillText(String(q + 1), tx, ty); x.lineWidth = 2.5; x.strokeStyle = '#dc2626';
+    });
+    wiz._name = name;
+  }
+  ['wK', 'wDir', 'wNum'].forEach(id => $('#' + id).onchange = () => { if (wiz && wiz.base) wizRegroup(); });
+  $('#wLab').onchange = () => { if (wiz && wiz.base) wizRender(); };
+  $('#wSens').onchange = () => { if (wiz && wiz.base) { wiz.sens = +$('#wSens').value; wizBuild(true); } };
+  $('#wizCv').onclick = ev => {
+    if (!wiz || !wiz.base) return;
+    const cv = $('#wizCv'), r = cv.getBoundingClientRect();
+    const x = (ev.clientX - r.left) * cv.width / r.width, y = (ev.clientY - r.top) * cv.height / r.height;
+    const lim = Math.max(wiz.rx, wiz.ry) * 1.3; let bi = -1, bd = lim * lim;
+    wiz.list.forEach((b, i) => { const d = (b.x - x) * (b.x - x) + (b.y - y) * (b.y - y); if (d < bd) { bd = d; bi = i; } });
+    wizHist.push(wiz.list.slice());
+    if (bi >= 0) wiz.list.splice(bi, 1); else wiz.list.push({ x, y });
+    wizRegroup();
+  };
+  $('#wUndo').onclick = () => { if (wizHist.length) { wiz.list = wizHist.pop(); wizRegroup(); } };
+  $('#wCorn').onclick = () => {
+    openCorners(wiz.photo, wiz.pts, 'Adjust the four corner handles. TL = top-left of the SHEET.', pts => {
+      const moved = !wiz.auto || quadMove(pts, wiz.auto.pts) > 4; wiz.pts = pts; wiz.align = moved ? 'manual' : wiz.auto.how; wizBuild(true);
+    });
+  };
+  $('#wCancel').onclick = () => { wiz = null; $('#wizEdit').hidden = true; $('#wizStart').hidden = false; wmsg(''); };
+  $('#wSave').onclick = async () => {
+    const m = $('#wMsg'); m.className = 'msg';
+    if (!wiz || wiz.groups.length < 2) { m.textContent = 'Fewer than 2 questions were found. Fix the bubbles first.'; return; }
+    if (!canUp()) { m.textContent = 'Only the admin (or a user the admin allowed) can add sheet types.'; return; }
+    const name = $('#wName').value.trim() || 'Sheet ' + (customTpls.length + 1);
+    const maxK = Math.max.apply(null, wiz.groups.map(g => g.pts.length)), lab = $('#wLab').value;
+    const labels = []; for (let o = 0; o < maxK; o++) labels.push(lab === '1' ? String(o + 1) : String.fromCharCode((lab === 'a' ? 97 : 65) + o));
+    const tpl = OMR.makeTemplate(wiz.base, { rx: wiz.rx, ry: wiz.ry }, wiz.groups, { id: 't' + Date.now(), name, align: wiz.mk ? (wiz.align === 'page' ? 'auto' : 'markers') : (wiz.align || 'manual'), mk: wiz.mk || null, labels });
+    customTpls.push(tpl);
+    if (!saveTpls()) { customTpls.pop(); m.textContent = 'Could not save (device storage is full).'; return; }
+    fillSelects(); renderTplList();
+    wiz = null; $('#wizEdit').hidden = true; $('#wizStart').hidden = false; $('#wName').value = '';
+    wmsg('✔ Sheet type “' + name + '” saved. Now create an answer key for it in the Answer Key tab.', true);
+    tpl.by = A.user.id;
+    const r = await queue('saveTemplate', { template: tpl }, 'tpl:' + tpl.id);
+    if (r.ok) wmsg('✔ Sheet type “' + name + '” saved and available to every user. Now create an answer key for it in the Answer Key tab.', true);
+    else if (r.error === 'offline') wmsg('✔ Saved on this phone; it will be uploaded when the internet is back.', true);
+    else wmsg('Saved on this phone, but the server said: ' + r.error);
+  };
+
+  // ---------- settings ----------
+  // ---------- network + outbox (changes are kept on the phone until the server has them) ----------
+  let outbox = LS.get('omr_out', []), flushing = null;
+  const trErr = e => (e === 'network' ? 'Cannot reach the server. Check the internet connection and the server address.' : e);
+  async function apiTo(url, action, payload) {
+    if (!url) return { ok: false, error: 'The server address is missing.' };
+    try {
+      const res = await fetch(url, { method: 'POST', body: JSON.stringify(Object.assign({ action, token: A && A.token }, payload)) });
+      const r = await res.json();
+      if (r && r.ok === false && r.error === 'AUTH' && action !== 'login') sessionExpired();
+      return r;
+    } catch (e) { return { ok: false, error: 'network' }; }
+  }
+  const api = (action, payload) => apiTo(A && A.url, action, payload);
+  function queue(action, payload, key) {
+    if (key) outbox = outbox.filter(o => o.key !== key);
+    outbox.push({ action, payload, key }); LS.set('omr_out', outbox);
+    return flush();
+  }
+  function flush() {
+    if (flushing) return flushing;
+    flushing = (async () => {
+      let last = { ok: true };
+      while (outbox.length && A && A.token) {
+        const it = outbox[0], r = await api(it.action, it.payload);
+        if (r && r.error === 'network') { last = { ok: false, error: 'offline' }; break; }
+        if (r && r.error === 'AUTH') { last = { ok: false, error: 'AUTH' }; break; }
+        const i = outbox.indexOf(it); if (i >= 0) outbox.splice(i, 1); LS.set('omr_out', outbox);
+        if (r && r.ok === false) { toast('Not saved on the server: ' + r.error); last = r; }
+      }
+      return last;
+    })().finally(() => { flushing = null; });
+    return flushing;
+  }
+
+  // ---------- log in / new user ----------
+  const amsg = (t, ok) => { const m = $('#aMsg'); m.textContent = t || ''; m.className = 'msg' + (ok ? ' ok' : ''); };
+  function showAuth(msg) {
+    $('#aUrl').value = (A && A.url) || oldSet.url || '';
+    if (!$('#aUrl').value) $('#aUrl').closest('details').open = true;
+    $('#authOv').classList.add('on'); amsg(msg || '', false);
+  }
+  function sessionExpired() {
+    if (!A || !A.token) return; A.token = ''; LS.set('omr_auth', A);
+    showAuth('Your login has ended. Please log in again.');
+  }
+  const authTab = up => { $('#aIn').hidden = up; $('#aUp').hidden = !up; $('#aTabIn').classList.toggle('on', !up); $('#aTabUp').classList.toggle('on', up); amsg(''); };
+  $('#aTabIn').onclick = () => authTab(false); $('#aTabUp').onclick = () => authTab(true);
+  $('#aLogin').onclick = async () => {
+    const url = $('#aUrl').value.trim(), id = $('#aId').value.trim(), pw = $('#aPw').value;
+    if (!url) { amsg('Open “Server address” below and paste the web app address.'); $('#aUrl').closest('details').open = true; return; }
+    if (!id || !pw) { amsg('Enter your ID and password.'); return; }
+    amsg('Logging in…', true);
+    const r = await apiTo(url, 'login', { id, password: pw });
+    if (!r.ok) { amsg(trErr(r.error)); return; }
+    A = { url, token: r.token, user: r.user }; LS.set('omr_auth', A); $('#aPw').value = '';
+    await startSession(r.defaultPassword);
+  };
+  $('#aPw').onkeydown = e => { if (e.key === 'Enter') $('#aLogin').click(); };
+  $('#aReg').onclick = async () => {
+    const url = $('#aUrl').value.trim(), name = $('#aName').value.trim(), mob = $('#aMob').value.trim();
+    if (!url) { amsg('Open “Server address” below and paste the web app address.'); $('#aUrl').closest('details').open = true; return; }
+    if (!name || !mob) { amsg('Enter your name and mobile number.'); return; }
+    amsg('Creating your account…', true);
+    const r = await apiTo(url, 'register', { name, mobile: mob });
+    if (!r.ok) { amsg(trErr(r.error)); return; }
+    const c = $('#aCred'); c.hidden = false;
+    c.innerHTML = 'Your ID: <b>' + esc(r.id) + '</b><br>Your password: <b>' + esc(r.password) + '</b><br><span class="hint">Write these down or take a screenshot. You can change the password after logging in.</span><br><button class="b" id="aGo">Continue to log in</button>';
+    $('#aGo').onclick = () => { $('#aId').value = r.id; $('#aPw').value = r.password; authTab(false); amsg('Tap “Log in”.', true); };
+    amsg('Account created.', true);
+  };
+  $('#logoutBtn').onclick = () => {
+    if (outbox.length && !confirm('Some changes are not uploaded yet and will be lost. Log out anyway?')) return;
+    if (!outbox.length && !confirm('Log out?')) return;
+    Object.keys(localStorage).forEach(k => { if (/^omr_(w_|ws_|dir|out|keys|results)/.test(k)) localStorage.removeItem(k); });
+    LS.set('omr_auth', { url: A ? A.url : '' }); location.reload();
+  };
+
+  // ---------- workspaces (my own, or a group) ----------
+  const personalWid = () => 'u:' + A.user.id;
+  const groupLabel = g => g.label + (g.name ? ' — ' + g.name : '');
+  const isMemberOf = g => g.members.some(m => m.id === A.user.id);
+  const myGroups = () => dir.groups.filter(isMemberOf);
+  function wsLabel(wid) {
+    if (A && wid === personalWid()) return 'My workspace';
+    const g = dir.groups.find(x => 'g:' + x.gid === wid); return g ? groupLabel(g) : wid;
+  }
+  function fillWsSel() {
+    const s = $('#wsSel'); if (!A || !A.user) { s.hidden = true; return; }
+    const gs = dir.groups.filter(g => isAdmin() || isMemberOf(g));
+    s.innerHTML = '<option value="' + esc(personalWid()) + '">👤 My workspace</option>' + gs.map(g => `<option value="g:${esc(g.gid)}">👥 ${esc(groupLabel(g))}</option>`).join('');
+    s.value = wsId; s.hidden = false;
+  }
+  function loadWs(wid) {
+    wsId = wid; LS.set('omr_ws_' + A.user.id, wid); lastSig = '';
+    const c = LS.get(wsKey(wid), null) || {};
+    keys = c.keys || {}; results = c.results || []; WSS = normWss(c.settings); WLOGO = c.logo || ''; logoDraft = null; applyS();
+    keyState = { id: '', tplId: 'builtin', answers: {} }; sc = { sel: null }; submitted = false;
+    $('#keyName').value = ''; $('#scanArea').hidden = true; $('#resBox').hidden = true;
+    fillSelects(); renderKey(); updateTimerBtn(); fillWsForm(); renderResults();
+  }
+  $('#wsSel').onchange = async () => { const v = $('#wsSel').value; await flush(); loadWs(v); pullWs(true); };
+  let lastSig = '';
+  async function pullWs(loud) {
+    if (!A || !A.token || !wsId) return;
+    await flush();
+    if (outbox.length) { if (loud) toast('Waiting to upload your changes…'); return; }
+    const wid = wsId, r = await api('wsSync', { wid });
+    if (!r || !r.ok) { if (loud) toast(trErr(r && r.error)); return; }
+    if (wid !== wsId || outbox.length) return;
+    const nk = {}; r.keys.forEach(k => { nk[k.id] = k; });
+    const nset = normWss(r.settings), sig = JSON.stringify([nk, r.results, nset, r.logo]);
+    if (sig === lastSig) { if (loud) toast('Up to date.'); return; }
+    const setChanged = JSON.stringify(nset) !== JSON.stringify(WSS) || r.logo !== WLOGO;
+    lastSig = sig; keys = nk; results = r.results; WSS = nset; WLOGO = r.logo || ''; applyS(); saveWsCache();
+    if (keyState.id && !keys[keyState.id]) { keyState = { id: '', tplId: 'builtin', answers: {} }; $('#keyName').value = ''; }
+    fillSelects(); renderKey(); updateTimerBtn(); if (setChanged && !logoDraft && !$('#v-set').classList.contains('on')) fillWsForm();
+    if ($('#v-res').classList.contains('on')) renderResults();
+    if (submitted) refreshResult();
+  }
+  async function pullDir() {
+    if (!A || !A.token) return false;
+    const r = await api('bootstrap', {}); if (!r || !r.ok) return false;
+    dir = { users: r.users, groups: r.groups, requests: r.requests }; LS.set('omr_dir', dir);
+    A.user = r.user; LS.set('omr_auth', A);
+    const pend = new Set(outbox.filter(o => o.action === 'saveTemplate').map(o => o.payload.template.id));
+    const keep = customTpls.filter(t => pend.has(t.id) && !r.templates.some(s => s.id === t.id));
+    customTpls = r.templates.concat(keep); saveTpls();
+    renderUserBits(); fillWsSel(); fillSelects();
+    ['grp', 'prof', 'tpl'].forEach(v => { if ($('#v-' + v).classList.contains('on')) ({ grp: renderGroups, prof: renderProfile, tpl: renderTplList })[v](); });
+    return true;
+  }
+  function renderUserBits() {
+    const u = A && A.user; $('#userPill').textContent = u ? u.name : ''; $('#userPill').hidden = !u;
+    $('#navTpl').hidden = !canUp(); $('#navAdm').hidden = !isAdmin();
+    const n = u ? dir.requests.filter(q => q.to === u.id).length : 0;
+    $('#navGrp').innerHTML = 'Groups' + (n ? '<span class="badge">' + n + '</span>' : '');
+    const on = document.querySelector('nav button.on'); if (on && on.hidden) gotoTab('key');
+  }
+  function migrateLegacy() {
+    if (!canUp()) return;
+    const lk = LS.get('omr_keys', null), lr = LS.get('omr_results', null);
+    if (lk && Object.keys(lk).length && !Object.keys(keys).length && wsId === personalWid()) {
+      keys = lk; results = lr || []; saveWsCache();
+      Object.keys(keys).forEach(id => queue('saveKey', { wid: wsId, key: keys[id] }, 'key:' + id));
+      results.forEach(r => queue('saveResult', { wid: wsId, result: r }, 'res:' + r.id));
+      localStorage.removeItem('omr_keys'); localStorage.removeItem('omr_results');
+      toast('Your earlier answer keys and results were moved to your workspace.');
+    }
+    customTpls.forEach(t => { if (!t.by) queue('saveTemplate', { template: t }, 'tpl:' + t.id); });
+  }
+  async function startSession(defPw) {
+    $('#authOv').classList.remove('on');
+    wsId = ''; loadWs(LS.get('omr_ws_' + A.user.id, '') || personalWid());
+    renderUserBits(); migrateLegacy();
+    await pullDir();
+    if (wsId.indexOf('g:') === 0 && !dir.groups.some(g => 'g:' + g.gid === wsId)) loadWs(personalWid());
+    fillWsSel(); renderUserBits(); pullWs(false);
+    if (defPw) setTimeout(() => alert('You are using the default admin password. Please change it now: Profile → Change password.'), 300);
+  }
+
+  // ---------- Settings tab (rules + heading of the open workspace, and this phone) ----------
+  let logoDraft = null;
+  function fillWsForm() {
+    $('#sPer').value = WSS.per; $('#sNeg').value = WSS.neg; $('#sTim').value = WSS.timerPct; $('#sPass').value = WSS.passPct;
+    $('#hL1').value = WSS.header.l1; $('#hL2').value = WSS.header.l2; $('#hL3').value = WSS.header.l3; $('#hL4').value = WSS.header.l4;
+    showLogo();
+    $('#sThr').value = DEV.thr; $('#sFill').value = DEV.fillPct;
+    $('#wsNote').textContent = A && A.user ? 'These rules and the result sheet heading apply to: ' + wsLabel(wsId) + (wsId.indexOf('g:') === 0 ? ' (every member of the group can change them).' : '.') : '';
+  }
+  function showLogo() {
+    const lg = logoDraft != null ? logoDraft : WLOGO, p = $('#logoPrev');
+    p.hidden = !lg; if (lg) p.src = lg; $('#logoDel').hidden = !lg;
+  }
+  function resizeLogo(file) {
+    return new Promise((res, rej) => {
+      const u = URL.createObjectURL(file), im = new Image();
+      im.onload = () => {
+        URL.revokeObjectURL(u); let side = 240, out = '';
+        for (let t = 0; t < 6; t++) {
+          const k = Math.min(1, side / Math.max(im.naturalWidth, im.naturalHeight)), w = Math.max(1, Math.round(im.naturalWidth * k)), h = Math.max(1, Math.round(im.naturalHeight * k));
+          const cv = document.createElement('canvas'); cv.width = w; cv.height = h; const x = cv.getContext('2d'); x.fillStyle = '#fff'; x.fillRect(0, 0, w, h); x.drawImage(im, 0, 0, w, h);
+          out = cv.toDataURL('image/jpeg', 0.85); if (out.length < 44000) break; side = Math.round(side * 0.75);
+        }
+        res(out);
+      };
+      im.onerror = () => { URL.revokeObjectURL(u); rej(new Error('Could not open the image')); };
+      im.src = u;
+    });
+  }
+  $('#logoIn').onchange = async e => {
+    const f = e.target.files[0]; e.target.value = ''; if (!f) return;
+    try { logoDraft = await resizeLogo(f); showLogo(); $('#sMsg').className = 'msg'; $('#sMsg').textContent = 'Logo chosen — tap “Save for this workspace”.'; }
+    catch (err) { $('#sMsg').textContent = err.message; }
+  };
+  $('#logoDel').onclick = () => { logoDraft = ''; showLogo(); };
+  $('#sSave').onclick = async () => {
+    const m = $('#sMsg'); m.className = 'msg';
+    const per = parseFloat($('#sPer').value), neg = parseFloat($('#sNeg').value), tp = parseFloat($('#sTim').value), pp = parseFloat($('#sPass').value);
+    if ([per, neg, tp, pp].some(isNaN) || pp < 0 || pp > 100 || per < 0 || neg < 0 || tp < 0 || tp > 100) { m.textContent = 'Please enter valid values.'; return; }
+    WSS = normWss({ per, neg, timerPct: tp, passPct: pp, header: { l1: $('#hL1').value.trim(), l2: $('#hL2').value.trim(), l3: $('#hL3').value.trim(), l4: $('#hL4').value.trim() } });
+    if (logoDraft != null) WLOGO = logoDraft; logoDraft = null;
+    applyS(); saveWsCache(); updateTimerBtn(); refreshResult(); fillWsForm();
+    m.className = 'msg ok'; m.textContent = '✔ Saved on this phone — sharing…';
+    const r = await queue('saveWs', { wid: wsId, settings: WSS, logo: WLOGO }, 'ws:' + wsId);
+    if (r.ok) m.textContent = '✔ Saved' + (wsId.indexOf('g:') === 0 ? ' and shared with the group.' : '.');
+    else if (r.error === 'offline') m.textContent = '✔ Saved on this phone. It will be uploaded when the internet is back.';
+    else { m.className = 'msg'; m.textContent = 'Saved on this phone, but the server said: ' + r.error; }
+  };
+  $('#dSave').onclick = () => {
+    const m = $('#dMsg'), thr = parseFloat($('#sThr').value), fp = parseFloat($('#sFill').value);
+    if (isNaN(thr) || isNaN(fp) || thr < 0.03 || thr > 0.6 || fp < 30 || fp > 95) { m.className = 'msg'; m.textContent = 'Please enter valid values.'; return; }
+    DEV.thr = thr; DEV.fillPct = fp; applyS(); saveSettings(); refreshResult(); m.className = 'msg ok'; m.textContent = '✔ Saved on this phone.';
+  };
+
+  // ---------- Groups tab ----------
+  const act = async (action, payload, okMsg, msgEl) => {
+    const r = await api(action, payload);
+    if (msgEl) { msgEl.className = 'msg' + (r.ok ? ' ok' : ''); msgEl.textContent = r.ok ? okMsg : trErr(r.error); } else if (!r.ok) toast(trErr(r.error));
+    if (r.ok) await pullDir();
+    return r;
+  };
+  function userDatalist() {
+    let d = $('#dlUsers'); if (!d) { d = document.createElement('datalist'); d.id = 'dlUsers'; document.body.appendChild(d); }
+    d.innerHTML = dir.users.map(u => `<option value="${esc(u.id)}">${esc(u.name)}</option>`).join('');
+  }
+  function renderGroups() {
+    if (!A || !A.user) return; userDatalist();
+    const inc = dir.requests.filter(q => q.to === A.user.id);
+    $('#invIn').innerHTML = inc.length ? inc.map(q => `<div class="item"><div><b>${esc(q.glabel || 'A group')}${q.gname ? ' — ' + esc(q.gname) : ''}</b><small>${esc(q.fromName)} (${esc(q.from)}) invited you</small></div>
+      <div><button class="b sm" data-acc="${esc(q.rid)}">Accept</button> <button class="b red sm" data-dec="${esc(q.rid)}">Decline</button></div></div>`).join('') : '<p class="hint">No invitations.</p>';
+    $('#invIn').querySelectorAll('[data-acc]').forEach(b => b.onclick = async () => { await act('respond', { rid: b.dataset.acc, accept: true }); renderGroups(); });
+    $('#invIn').querySelectorAll('[data-dec]').forEach(b => b.onclick = async () => { await act('respond', { rid: b.dataset.dec, accept: false }); renderGroups(); });
+    const gs = myGroups(), L = $('#grpList');
+    L.innerHTML = gs.length ? gs.map(g => `<div class="card"><b>${esc(groupLabel(g))}</b>${'g:' + g.gid === wsId ? '<span class="chip g">open now</span>' : ''}
+      <div class="hint">Members</div>${g.members.map(m => `<div class="act">${esc(m.name)} • ${esc(m.id)}${m.role === 'owner' ? ' ★' : ''}</div>`).join('')}
+      ${dir.requests.filter(q => q.gid === g.gid).map(q => `<div class="act">⏳ Waiting: ${esc(q.toName)} (${esc(q.to)}), invited by ${esc(q.fromName)}</div>`).join('')}
+      <div class="sm2" style="margin-top:8px"><input list="dlUsers" placeholder="ID (mobile) of the user to invite" data-inv="${esc(g.gid)}"><button class="b sm" data-send="${esc(g.gid)}">Send request</button></div>
+      <button class="b alt sm" data-use="${esc(g.gid)}" style="margin-top:8px">Open this group</button>
+      <button class="b alt sm" data-ren="${esc(g.gid)}" style="margin-top:8px">Rename</button>
+      <button class="b red sm" data-leave="${esc(g.gid)}" style="margin-top:8px">Leave</button><div class="msg" data-gm="${esc(g.gid)}"></div></div>`).join('')
+      : '<div class="card"><p class="hint">You are not in any group yet. Create one above, or accept an invitation.</p></div>';
+    L.querySelectorAll('[data-send]').forEach(b => b.onclick = async () => {
+      const gid = b.dataset.send, inp = L.querySelector('[data-inv="' + gid + '"]'), msg = L.querySelector('[data-gm="' + gid + '"]');
+      if (!inp.value.trim()) { msg.className = 'msg'; msg.textContent = 'Type or pick the user ID first.'; return; }
+      const r = await act('invite', { gid, to: inp.value.trim() }); renderGroups();
+      const m2 = $('#grpList').querySelector('[data-gm="' + gid + '"]'); if (m2) { m2.className = 'msg' + (r.ok ? ' ok' : ''); m2.textContent = r.ok ? 'Request sent. The user must accept it.' : trErr(r.error); }
+    });
+    L.querySelectorAll('[data-use]').forEach(b => b.onclick = async () => { await flush(); loadWs('g:' + b.dataset.use); fillWsSel(); pullWs(true); gotoTab('key'); });
+    L.querySelectorAll('[data-ren]').forEach(b => b.onclick = async () => {
+      const g = gs.find(x => x.gid === b.dataset.ren), n = prompt('Group name', g.name); if (n === null) return;
+      await act('renameGroup', { gid: g.gid, name: n }); renderGroups();
+    });
+    L.querySelectorAll('[data-leave]').forEach(b => b.onclick = async () => {
+      if (!confirm('Leave this group? You will no longer see its answer keys and results.')) return;
+      const gid = b.dataset.leave; await flush();
+      const r = await act('leaveGroup', { gid }); if (r.ok) { if (wsId === 'g:' + gid) loadWs(personalWid()); fillWsSel(); renderGroups(); }
+    });
+  }
+  $('#gCreate').onclick = async () => {
+    const r = await act('createGroup', { name: $('#gName').value.trim() }, '✔ Group created. Invite members below.', $('#gMsg'));
+    if (r.ok) { $('#gName').value = ''; renderGroups(); }
+  };
+
+  // ---------- Profile tab ----------
+  function renderProfile() {
+    if (!A || !A.user) return; userDatalist();
+    const u = A.user; $('#pName').textContent = u.name; $('#pRole').textContent = u.role === 'admin' ? 'Admin' : (u.canUpload ? 'User • can upload sheets' : 'User');
+    $('#pRole').className = 'chip ' + (u.role === 'admin' ? 'a' : u.canUpload ? 'g' : ''); $('#pId').textContent = 'ID: ' + u.id;
+    const gs = dir.groups.filter(g => isAdmin() || isMemberOf(g)), cur = $('#invGroup').value;
+    $('#invGroup').innerHTML = gs.length ? gs.map(g => `<option value="${esc(g.gid)}">${esc(groupLabel(g))}</option>`).join('') : '<option value="">— you are not in a group —</option>';
+    if (cur && gs.some(g => g.gid === cur)) $('#invGroup').value = cur;
+    const q = $('#uSearch').value.trim().toLowerCase(), g = dir.groups.find(x => x.gid === $('#invGroup').value);
+    const L = dir.users.filter(x => !q || x.name.toLowerCase().indexOf(q) >= 0 || x.id.toLowerCase().indexOf(q) >= 0);
+    $('#uList').innerHTML = L.length ? L.map(x => {
+      const isMem = g && g.members.some(m => m.id === x.id), pend = g && dir.requests.some(r => r.gid === g.gid && r.to === x.id);
+      const inv = g && x.id !== u.id && !isMem ? (pend ? '<span class="hint">invited</span>' : `<button class="b sm" data-inv="${esc(x.id)}">Invite</button>`) : '';
+      const adm = isAdmin() && x.role !== 'admin' ? `<label class="hint" style="display:inline-block;margin:0 6px 0 0"><input type="checkbox" style="width:auto" data-up="${esc(x.id)}" ${x.canUpload ? 'checked' : ''}> can upload sheets</label><button class="b alt sm" data-rp="${esc(x.id)}">Reset password</button>` : '';
+      return `<div class="item"><div><b>${esc(x.name)}</b>${x.role === 'admin' ? '<span class="chip a">Admin</span>' : x.canUpload ? '<span class="chip g">uploader</span>' : ''}<small>ID ${esc(x.id)}</small></div><div style="text-align:right">${inv}${adm}</div></div>`;
+    }).join('') : '<p class="hint">No users found.</p>';
+    $('#uList').querySelectorAll('[data-inv]').forEach(b => b.onclick = async () => {
+      const r = await act('invite', { gid: $('#invGroup').value, to: b.dataset.inv }); if (r.ok) { toast('Request sent.'); renderProfile(); }
+    });
+    $('#uList').querySelectorAll('[data-up]').forEach(c => c.onchange = async () => { await act('setUpload', { id: c.dataset.up, value: c.checked }); renderProfile(); });
+    $('#uList').querySelectorAll('[data-rp]').forEach(b => b.onclick = async () => {
+      if (!confirm('Create a new password for this user?')) return;
+      const r = await api('resetPassword', { id: b.dataset.rp }); if (r.ok) alert('New password: ' + r.password + '\nGive it to the user. They can change it after logging in.'); else toast(trErr(r.error));
+    });
+  }
+  $('#uSearch').oninput = renderProfile; $('#invGroup').onchange = renderProfile;
+  $('#pwSave').onclick = async () => {
+    const m = $('#pwMsg'), o = $('#pwOld').value, n = $('#pwNew').value;
+    if (!o || n.length < 6) { m.className = 'msg'; m.textContent = 'Enter your current password and a new one (6+ characters).'; return; }
+    const r = await api('changePassword', { oldPassword: o, newPassword: n });
+    if (r.ok) { A.token = r.token; LS.set('omr_auth', A); $('#pwOld').value = ''; $('#pwNew').value = ''; m.className = 'msg ok'; m.textContent = '✔ Password changed.'; }
+    else { m.className = 'msg'; m.textContent = trErr(r.error); }
+  };
+
+  // ---------- Admin tab ----------
+  async function loadAdmin() {
+    if (!isAdmin()) return;
+    $('#admGroups').innerHTML = '<p class="hint">Loading…</p>';
+    const r = await api('overview', {}); if (!r.ok) { $('#admGroups').innerHTML = '<p class="msg">' + esc(trErr(r.error)) + '</p>'; return; }
+    const lab = {}; r.groups.forEach(g => { lab['g:' + g.gid] = groupLabel(g); });
+    $('#admGroups').innerHTML = r.groups.length ? r.groups.map(g => `<div class="item"><div><b>${esc(groupLabel(g))}</b><small>${g.members.map(m => esc(m.name)).join(', ')}<br>${g.keys} answer key(s) • ${g.results} result(s)${g.last ? ' • last activity ' + esc(new Date(g.last).toLocaleString()) : ''}</small></div>
+      <button class="b sm" data-open="${esc(g.gid)}">Open</button></div>`).join('') : '<p class="hint">No groups yet.</p>';
+    $('#admGroups').querySelectorAll('[data-open]').forEach(b => b.onclick = async () => { await flush(); loadWs('g:' + b.dataset.open); fillWsSel(); pullWs(true); gotoTab('res'); });
+    $('#admAct').innerHTML = r.activity.length ? r.activity.map(x => `<div class="act">${esc(new Date(x.t).toLocaleString())} • <b>${esc(x.name)}</b> ${esc(x.action)}${x.detail ? ' — ' + esc(x.detail) : ''}<br><span class="hint">${esc(lab[x.wid] || (x.wid ? 'personal workspace' : 'account'))}</span></div>`).join('') : '<p class="hint">Nothing yet.</p>';
+  }
+  $('#admRef').onclick = loadAdmin;
+
+  // ---------- install (PWA) ----------
+  let dip = null;
+  window.addEventListener('beforeinstallprompt', e => { e.preventDefault(); dip = e; $('#installBtn').hidden = false; });
+  $('#installBtn').onclick = async () => { if (dip) { dip.prompt(); await dip.userChoice; dip = null; $('#installBtn').hidden = true; } };
+  window.addEventListener('appinstalled', () => { $('#installBtn').hidden = true; });
+  const standalone = window.matchMedia('(display-mode: standalone)').matches || navigator.standalone;
+  if (/iphone|ipad|ipod/i.test(navigator.userAgent) && !standalone) $('#iosHint').hidden = false;
+  if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => { });
+
+  // ---------- start ----------
+  applyS(); fillSelects(); updateTimerBtn(); renderKey(); renderTplList();
+  if (A && A.token && A.user) startSession(false); else showAuth('');
+  setInterval(() => { if (A && A.token && !document.hidden) { pullWs(false); if ((setInterval.n = (setInterval.n || 0) + 1) % 3 === 0) pullDir(); } }, 15000);
+  document.addEventListener('visibilitychange', () => { if (!document.hidden && A && A.token) { pullWs(false); pullDir(); } });
+  window.__omr = { get state() { return { S, keys, results, sc, keyState, customTpls, wiz }; } }; // for debugging / tests
+})();
