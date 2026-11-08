@@ -27,7 +27,7 @@
   let results = [];
   let keyState = { id: '', tplId: 'builtin', answers: {} };
   let sc = { sel: null };
-  let submitted = false, timerOn = false;
+  let submitted = false, timerOn = false, liveMode = false;   // liveMode: the last scan came from the live camera, so "Next student" reopens it
   const builtin = OMR.builtinTemplate();
   const allTpls = () => [builtin].concat(customTpls);
   const getTpl = id => allTpls().find(t => t.id === id) || null;
@@ -293,7 +293,7 @@
     const key = keys[$('#scanKey').value];
     if (!key) { smsg('Choose an answer key first (create one in the Answer Key tab).'); return; }
     if (!getTpl(key.tplId)) { smsg('This answer key uses a sheet type that is not on this device. Open the Settings tab and refresh from the server, or re-create the sheet type.'); return; }
-    smsg('Scanning…', true);
+    smsg('Scanning…', true); liveMode = false;
     try { const p = await loadPhoto(file, 2200); sc = { photo: p, rot: undefined, pts: null, manual: new Set(), rid: null }; setTimeout(runScan, 30); }
     catch (e) { smsg('Error: ' + e.message); }
   }
@@ -314,14 +314,15 @@
       if (saveTpls()) setTimeout(() => smsg('✔ Corner squares learned for this sheet type — next time the photo will line up automatically.', true), 50);
     } catch (e) { /* ignore */ }
   }
-  function runScan() {
+  function runScan(live) {
     const tpl = scanTplObj(), p = sc.photo;
     const r = OMR.scanTpl(p.rgba, p.w, p.h, tpl, { pts: sc.pts || undefined, rot: sc.pts ? undefined : sc.rot });
     if (!r.found) {
+      if (live) return false;                  // live camera: just try again with the next frame
       smsg('Could not find the sheet corners automatically. Place the four handles on the sheet corners.');
       const quad = sc.lastQuad || insetQuad(p.w, p.h);
       openCorners(p, quad, cornerHint(tpl), pts => { sc.pts = pts; sc.lastQuad = pts; runScan(); });
-      return;
+      return false;
     }
     if (r.learned && !tpl.builtin) { tpl.mk = r.learned; tpl.align = 'markers'; if (saveTpls()) setTimeout(() => smsg('✔ Corner squares learned for this sheet type — scanning now lines up automatically.', true), 50); }
     else learnMarkers(tpl, p, r);
@@ -337,6 +338,7 @@
     else if (nb) smsg('✔ Scan complete — ' + n + ' questions have marks. ⚠ ' + nb + ' question(s) have multiple or partly filled marks (orange) and will count as wrong. Tap a bubble to correct it, then Submit.', true);
     else smsg('✔ Scan complete — ' + n + ' questions have marks. Fix any bubble by tapping it, then Submit.', true);
     $('#scanWrap').scrollIntoView({ behavior: 'smooth', block: 'start' });
+    return true;
   }
   $('#rotBtn').onclick = () => { if (sc.photo) { sc.pts = null; sc.rot = ((sc.rot || 0) + 1) % 4; runScan(); } };
   $('#cornBtn').onclick = () => {
@@ -392,6 +394,38 @@
     $('#rS').textContent = '+' + fmt(S.per) + ' per correct, −' + fmt(S.neg) + ' per wrong (multiple or partly filled marks count as wrong)';
     $('#resBox').hidden = false;
   }
+
+  // ---------- live camera scan ----------
+  // The camera shows a box on the 4 black squares. When they are locked the person taps "Read & Submit" (or Auto-submit does it).
+  // A clean sheet is saved at once and the camera keeps running; anything doubtful opens the normal review screen.
+  $('#liveBtn').onclick = async () => {
+    const key = keys[$('#scanKey').value];
+    if (!key) { smsg('Choose an answer key first (create one in the Answer Key tab).'); return; }
+    const tpl = getTpl(key.tplId);
+    if (!tpl) { smsg('This answer key uses a sheet type that is not on this device. Open the Settings tab and refresh from the server, or re-create the sheet type.'); return; }
+    const m = tpl.mk || tpl.ref, ra = Math.hypot(m[0][0] - m[1][0], m[0][1] - m[1][1]) + Math.hypot(m[3][0] - m[2][0], m[3][1] - m[2][1]),
+      rb = Math.hypot(m[1][0] - m[2][0], m[1][1] - m[2][1]) + Math.hypot(m[0][0] - m[3][0], m[0][1] - m[3][1]);
+    smsg('', true);
+    const err = await LiveCam.open({ aspect: Math.max(ra, rb) / Math.min(ra, rb), mode: tpl.align === 'page' ? 'page' : 'markers', title: key.name, onShot: liveShot });
+    if (err && err.error) smsg(err.error); else liveMode = true;
+  };
+  async function liveShot(frame, who) {
+    // keep the photo at most 2200 px, like a normal photo
+    const k = Math.min(1, 2200 / Math.max(frame.width, frame.height)); let cv = frame;
+    if (k < 1) { cv = document.createElement('canvas'); cv.width = Math.round(frame.width * k); cv.height = Math.round(frame.height * k); cv.getContext('2d').drawImage(frame, 0, 0, cv.width, cv.height); }
+    const p = { cv, w: cv.width, h: cv.height, rgba: cv.getContext('2d', { willReadFrequently: true }).getImageData(0, 0, cv.width, cv.height).data };
+    $('#stuName').value = who.name; $('#stuId').value = who.id;
+    sc = { photo: p, rot: undefined, pts: null, manual: new Set(), rid: null };
+    if (!runScan(true)) return { fail: 'Could not read the sheet — hold steady and try again.' };
+    const r = sc.res, n = sc.sel.filter(s => s.length).length;
+    if (!(r.fit >= 0.1) || r.ambiguous || n < 3 || sc.bad.size) { LiveCam.close(); return { review: true }; }   // doubtful: show the review screen (message is already set)
+    $('#submitBtn').onclick();
+    const out = { name: stuNow().name, id: stuNow().id, correct: $('#rC').textContent, wrong: $('#rW').textContent, blank: $('#rB').textContent, score: $('#rF').textContent };
+    const w = $('#scanMsg').textContent; if (w.indexOf('already has a result') > 0) out.warn = w.replace(/^⚠\s*/, '');
+    sc = { sel: null }; submitted = false; $('#scanArea').hidden = true; $('#resBox').hidden = true; $('#stuName').value = ''; $('#stuId').value = '';
+    smsg('Saved: ' + out.score + ' (' + (out.name || 'Unknown') + '). Live camera is on.', true);
+    return out;
+  }
   let syncT = null;
   function refreshResult() {
     if (!submitted) return; const key = keys[$('#scanKey').value]; if (!key) return;
@@ -418,6 +452,7 @@
   $('#nextBtn').onclick = () => {
     $('#scanArea').hidden = true; $('#resBox').hidden = true; sc = { sel: null }; submitted = false;
     $('#stuName').value = ''; $('#stuId').value = ''; smsg('Ready for the next sheet.', true); window.scrollTo({ top: 0, behavior: 'smooth' });
+    if (liveMode) $('#liveBtn').click();       // back to the live camera
   };
   $('#stuPdf').onclick = () => { const r = results.find(x => x.id === sc.rid); if (r) pdfStudents([r], t => smsg(t, true)); };
 
