@@ -464,11 +464,10 @@
   const isFail = r => pctOf(r) < passPct();
   const p1 = x => String(Math.round(x * 10) / 10);
   const nameOf = r => r.student || 'Unknown';
-  // Highest marks first; equal marks share the same rank
-  function ranked(keyId) {
-    const L = results.filter(r => r.keyId === keyId).sort((x, y) => y.fin - x.fin || y.c - x.c || x.w - y.w || nameOf(x).localeCompare(nameOf(y)) || x.t - y.t);
-    let rank = 0, prev = null;
-    return L.map((r, i) => { if (prev === null || r.fin !== prev) rank = i + 1; prev = r.fin; return { r, rank, n: L.length }; });
+    function ranked(keyId) {
+    // Highest score first; same score -> fewer wrong answers first; still equal -> the sheet scanned earlier first. Every student gets his own rank.
+    const L = results.filter(r => r.keyId === keyId).sort((x, y) => y.fin - x.fin || x.w - y.w || y.c - x.c || x.t - y.t);
+    return L.map((r, i) => ({ r, rank: i + 1, n: L.length }));
   }
   function resKeyIds() {
     const seen = {}, out = [];
