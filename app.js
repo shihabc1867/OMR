@@ -966,7 +966,7 @@
     $('#uList').innerHTML = L.length ? L.map(x => {
       const isMem = g && g.members.some(m => m.id === x.id), pend = g && dir.requests.some(r => r.gid === g.gid && r.to === x.id);
       const inv = g && x.id !== u.id && !isMem ? (pend ? '<span class="hint">invited</span>' : `<button class="b sm" data-inv="${esc(x.id)}">Invite</button>`) : '';
-      const adm = isAdmin() && x.role !== 'admin' ? `<label class="hint" style="display:inline-block;margin:0 6px 0 0"><input type="checkbox" style="width:auto" data-up="${esc(x.id)}" ${x.canUpload ? 'checked' : ''}> can upload sheets</label><button class="b alt sm" data-rp="${esc(x.id)}">Reset password</button>` : '';
+      const adm = isAdmin() && x.role !== 'admin' ? `<label class="hint" style="display:inline-block;margin:0 6px 0 0"><input type="checkbox" style="width:auto" data-up="${esc(x.id)}" ${x.canUpload ? 'checked' : ''}> can upload sheets</label><button class="b alt sm" data-rp="${esc(x.id)}">Reset password</button> <button class="b red sm" data-du="${esc(x.id)}" data-dn="${esc(x.name)}">Delete</button>` : '';
       return `<div class="item"><div><b>${esc(x.name)}</b>${x.role === 'admin' ? '<span class="chip a">Admin</span>' : x.canUpload ? '<span class="chip g">uploader</span>' : ''}<small>ID ${esc(x.id)}</small></div><div style="text-align:right">${inv}${adm}</div></div>`;
     }).join('') : '<p class="hint">No users found.</p>';
     $('#uList').querySelectorAll('[data-inv]').forEach(b => b.onclick = async () => {
@@ -976,6 +976,11 @@
     $('#uList').querySelectorAll('[data-rp]').forEach(b => b.onclick = async () => {
       if (!confirm('Create a new password for this user?')) return;
       const r = await api('resetPassword', { id: b.dataset.rp }); if (r.ok) alert('New password: ' + r.password + '\nGive it to the user. They can change it after logging in.'); else toast(trErr(r.error));
+    });
+    $('#uList').querySelectorAll('[data-du]').forEach(b => b.onclick = async () => {
+      if (!confirm('Delete the user “' + b.dataset.dn + '” (ID ' + b.dataset.du + ')?\n\nTheir account, group memberships and their own workspace data (answer keys, results, question papers) will be deleted. Data inside groups stays.\n\nThis cannot be undone.')) return;
+      const r = await api('deleteUser', { id: b.dataset.du });
+      if (r && r.ok) { toast('User deleted.'); await pullDir(); renderProfile(); } else toast(trErr(r && r.error));
     });
   }
   $('#uSearch').oninput = renderProfile; $('#invGroup').onchange = renderProfile;
