@@ -3,340 +3,508 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-<title>OMR Scanner</title>
+<meta name="theme-color" content="#0f0f14">
 <link rel="manifest" href="manifest.json">
 <link rel="icon" href="icon-192.png">
-<link rel="apple-touch-icon" href="icon-192.png">
-<meta name="theme-color" content="#0f766e">
-<meta name="apple-mobile-web-app-capable" content="yes">
-<style>
-*{box-sizing:border-box}
-body{margin:0;font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;background:#f1f5f9;color:#0f172a}
-header{background:#0f766e;color:#fff;padding:12px 14px;display:flex;justify-content:space-between;align-items:center}
-header h1{font-size:18px;margin:0}
-nav{display:flex;background:#fff;border-bottom:1px solid #e2e8f0;position:sticky;top:0;z-index:5;overflow-x:auto}
-nav button{flex:1;min-width:64px;padding:12px 6px;border:0;background:none;font:inherit;font-size:14px;border-bottom:3px solid transparent;color:#334155;white-space:nowrap}
-nav button.on{color:#0f766e;border-color:#0f766e;font-weight:700}
-main{padding:12px;max-width:820px;margin:auto}
-section{display:none}section.on{display:block}
-.card{background:#fff;border-radius:12px;padding:12px;margin-bottom:12px;box-shadow:0 1px 3px #0001}
-label{display:block;font-size:13px;margin:8px 0 3px;color:#475569}
-input,select{width:100%;padding:10px;border:1px solid #cbd5e1;border-radius:8px;font:inherit;font-size:15px;background:#fff}
-input[type=range]{padding:0}
-button.b{padding:11px 14px;border:0;border-radius:8px;background:#0f766e;color:#fff;font:inherit;font-size:15px;margin:6px 6px 0 0;cursor:pointer}
-button.b.alt{background:#475569}button.b.red{background:#dc2626}
-button.b.tm{background:#e2e8f0;color:#0f172a}button.b.tm.on{background:#f59e0b;color:#000}
-button.b.sm{padding:6px 10px;font-size:13px;margin:0}
-.cvwrap{overflow:auto;max-height:72vh;border:1px solid #cbd5e1;border-radius:8px;background:#fff;-webkit-overflow-scrolling:touch}
-canvas{display:block;width:100%;height:auto}
-.zoom{display:flex;align-items:center;gap:8px;margin:0 0 6px;font-size:13px;color:#475569;flex-wrap:wrap}
-.zoom button.z{width:36px;height:34px;border:1px solid #cbd5e1;border-radius:8px;background:#fff;font-size:18px}
-.big{font-size:30px;font-weight:800;color:#0f766e}
-.row{display:flex;justify-content:space-between;padding:7px 0;border-bottom:1px dashed #e2e8f0}
-.msg{font-size:13px;color:#b45309;margin:8px 0 0}
-.ok{color:#0f766e}
-.hint{font-size:12px;color:#64748b;margin:6px 0}
-.legend span{display:inline-block;width:12px;height:12px;border-radius:50%;vertical-align:middle;margin:0 3px 0 8px}
-.item{display:flex;justify-content:space-between;align-items:center;padding:9px 0;border-bottom:1px solid #e2e8f0;gap:8px}
-.item small{color:#64748b;display:block}
-.two{display:grid;grid-template-columns:1fr 1fr;gap:8px}
-#cornerOv{position:fixed;inset:0;background:#0f172af2;z-index:50;overflow:auto;padding:10px;display:none}
-#cornerOv.on{display:block}
-#cornerOv .box{max-width:760px;margin:auto}
-#cornerOv p{color:#e2e8f0;font-size:13px;margin:4px 0 8px}
-#cornerCv{touch-action:none;border-radius:8px;background:#000}
-
-.rk{display:inline-block;min-width:26px;text-align:center;background:#0f766e;color:#fff;border-radius:6px;padding:1px 6px;font-size:13px;margin-right:6px}
-.item.fail b,.item.fail small,.item.fail .rk{color:#dc2626}.item.fail .rk{background:#fee2e2}
-.grp{font-weight:700;margin:14px 0 2px;color:#0f766e}
-#authOv{position:fixed;inset:0;background:#0f766e;z-index:80;overflow:auto;padding:16px;display:none}
-#authOv.on{display:block}
-#authOv .box{background:#fff;border-radius:14px;max-width:420px;margin:24px auto;padding:16px}
-#authOv h2{margin:0 0 4px;color:#0f766e}
-.tabs{display:flex;gap:6px;margin:10px 0}.tabs button{flex:1;padding:9px;border:1px solid #cbd5e1;background:#fff;border-radius:8px;font:inherit}
-.tabs button.on{background:#0f766e;color:#fff;border-color:#0f766e}
-.cred{background:#ecfdf5;border:1px solid #6ee7b7;border-radius:10px;padding:10px;margin-top:10px;font-size:15px}
-.cred b{font-size:18px;letter-spacing:.5px}
-header .hr{display:flex;gap:8px;align-items:center}
-header select{width:auto;max-width:46vw;padding:6px;font-size:13px}
-#userPill{font-size:13px;background:#ffffff33;border-radius:99px;padding:4px 10px;white-space:nowrap}
-.chip{display:inline-block;font-size:11px;border-radius:99px;padding:1px 8px;background:#e2e8f0;color:#334155;margin-left:6px}
-.chip.g{background:#d1fae5;color:#065f46}.chip.a{background:#fde68a;color:#92400e}
-.badge{background:#dc2626;color:#fff;border-radius:99px;font-size:11px;padding:0 6px;margin-left:4px}
-.sm2{display:flex;gap:6px;align-items:center;flex-wrap:wrap}
-.sm2 input,.sm2 select{flex:1;min-width:120px}
-.logoPrev{max-width:90px;max-height:90px;border:1px solid #cbd5e1;border-radius:8px;display:block;margin:6px 0}
-.act{font-size:12px;border-bottom:1px solid #e2e8f0;padding:5px 0;color:#334155}
-.act b{color:#0f766e}
-</style>
+<title>Vided</title>
+<link rel="stylesheet" href="style.css">
 </head>
 <body>
-<header><h1>OMR Scanner</h1><div class="hr"><select id="wsSel" title="Workspace"></select><span id="userPill"></span><button id="installBtn" class="b" hidden>⬇ Install</button></div></header>
-<nav>
-  <button data-v="key" class="on">Answer Key</button>
-  <button data-v="scan">Scan</button>
-  <button data-v="res">Results</button>
-  <button data-v="tpl" id="navTpl" hidden>Sheets</button>
-  <button data-v="grp" id="navGrp">Groups</button>
-  <button data-v="prof">Profile</button>
-  <button data-v="adm" id="navAdm" hidden>Admin</button>
-  <button data-v="set">Settings</button>
-</nav>
-<main>
+<div id="app">
 
-<!-- ANSWER KEY -->
-<section id="v-key" class="on">
-  <div class="card">
-    <label>Saved answer keys</label>
-    <select id="keySel"></select>
-    <label>Answer key name</label>
-    <input id="keyName" placeholder="e.g. Model Test 1">
-    <label>OMR sheet type</label>
-    <select id="keyTpl"></select>
-    <p class="hint">Tap the correct option for each question you want to score (any number of questions). Questions left empty are not counted. Use zoom (+) if the bubbles look small.</p>
-    <div id="keyCount" class="hint"></div>
-    <button class="b" id="keySave">💾 Save</button>
-    <button class="b alt" id="keyClear">Clear all</button>
-    <button class="b red" id="keyDel">Delete</button>
-    <div id="keyMsg" class="msg"></div>
-  </div>
-  <div class="zoom" data-for="keyCv"><button class="z" data-d="-1">−</button><span>Zoom</span><button class="z" data-d="1">＋</button></div>
-  <div class="cvwrap"><canvas id="keyCv"></canvas></div>
-</section>
-
-<!-- SCAN -->
-<section id="v-scan">
-  <div class="card">
-    <label>Answer key to grade against</label>
-    <select id="scanKey"></select>
-    <div class="two">
-      <div><label>Student name</label><input id="stuName" placeholder="Name"></div>
-      <div><label>Roll / ID</label><input id="stuId" placeholder="Roll or ID"></div>
+  <header>
+    <div class="logo">Vided</div>
+    <div class="hbtns">
+      <button id="undo" class="ico" title="Undo">&#8630;</button>
+      <button id="redo" class="ico" title="Redo">&#8631;</button>
+      <button id="goExport" class="accent">Export</button>
     </div>
-    <button class="b" id="camBtn">📷 Take photo of answer sheet</button>
-    <button class="b alt" id="galBtn">🖼 Choose from gallery</button>
-    <input type="file" id="camIn" accept="image/*" capture="environment" hidden>
-    <input type="file" id="galIn" accept="image/*" hidden>
-    <div id="scanMsg" class="msg"></div>
+  </header>
+
+  <div id="stage">
+    <canvas id="cv"></canvas>
+    <div id="empty">Open the <b>Media</b> tab and tap<br>“Add video / image” to start</div>
   </div>
 
-  <div id="scanArea" hidden>
-    <div class="hint legend">
-      <span style="background:#60a5fa88;border:2px solid #2563eb"></span>Detected / entered
-      <span style="background:#fbbf2488;border:2px solid #d97706"></span>Multiple / partial mark (counts wrong)
-      <span style="background:#4ade8088;border:2px solid #16a34a"></span>Correct
-      <span style="background:#f8717188;border:2px solid #dc2626"></span>Wrong
+  <div class="transport">
+    <button id="toStart" class="ico" title="Go to start">&#9198;</button>
+    <button id="play" class="ico big" title="Play / pause">&#9654;</button>
+    <button id="toEnd" class="ico" title="Go to end">&#9197;</button>
+    <span id="time">0:00.0 / 0:00.0</span>
+    <label class="zoomlbl">Zoom <input type="range" id="zoom" min="20" max="200" value="60"></label>
+  </div>
+  <input type="range" id="scrub" min="0" max="0" step="0.01" value="0">
+  <div id="tlwrap"><canvas id="tl"></canvas></div>
+
+  <nav id="tabs">
+    <button data-tab="media" class="active">Media</button>
+    <button data-tab="adjust">Adjust</button>
+    <button data-tab="animate">Animate</button>
+    <button data-tab="text">Text</button>
+    <button data-tab="audio">Audio</button>
+    <button data-tab="captions">Captions</button>
+    <button data-tab="cutout">Cutout</button>
+    <button data-tab="export">Export</button>
+    <button data-tab="project">Project</button>
+  </nav>
+
+  <main id="panels">
+
+    <!-- MEDIA -->
+    <section class="panel active" id="p-media">
+      <label class="filebtn">+ Add video / image
+        <input type="file" id="addMedia" accept="video/*,image/*" multiple hidden>
+      </label>
+      <div id="selInfo" class="hint">No clip selected. Tap a clip on the timeline.</div>
+      <div class="needsel" id="n-media">
+        <div class="grid3">
+          <button id="bSplit">Split</button>
+          <button id="bDup">Duplicate</button>
+          <button id="bDel" class="danger">Delete</button>
+        </div>
+        <div class="grid2">
+          <button id="bLeft">&#9664; Move earlier</button>
+          <button id="bRight">Move later &#9654;</button>
+        </div>
+        <div class="grid2">
+          <button id="bEditImg">Edit image…</button>
+          <button id="bFreeze">Freeze frame</button>
+        </div>
+        <div class="field" data-id="trIn" data-label="Trim start" data-min="0" data-max="10" data-step="0.05" data-val="0" data-unit="s"></div>
+        <div class="field" data-id="trOut" data-label="Trim end" data-min="0.1" data-max="10" data-step="0.05" data-val="10" data-unit="s"></div>
+        <div class="field" data-id="spd" data-label="Speed" data-min="25" data-max="400" data-step="5" data-val="100" data-unit="%"></div>
+        <div class="field" data-id="cvol" data-label="Clip volume" data-min="0" data-max="200" data-step="1" data-val="100" data-unit="%"></div>
+        <div id="n-clipfade">
+          <div class="field" data-id="cfi" data-label="Sound fade in" data-min="0" data-max="5" data-step="0.1" data-val="0" data-unit="s"></div>
+          <div class="field" data-id="cfo" data-label="Sound fade out" data-min="0" data-max="5" data-step="0.1" data-val="0" data-unit="s"></div>
+        </div>
+        <label class="lbl">Transition into this clip</label>
+        <select id="trType">
+          <option value="none">None (hard cut)</option>
+          <option value="fade">Cross dissolve</option>
+          <option value="dip">Dip to black</option>
+          <option value="slideL">Slide left</option>
+          <option value="slideR">Slide right</option>
+          <option value="zoom">Zoom</option>
+          <option value="wipe">Wipe</option>
+        </select>
+        <div class="field" data-id="trDur" data-label="Transition length" data-min="0.2" data-max="2" data-step="0.1" data-val="0.5" data-unit="s"></div>
+        <div class="hint">On the first clip, any transition fades in from black.</div>
+      </div>
+    </section>
+
+    <!-- ADJUST -->
+    <section class="panel" id="p-adjust">
+      <div class="needsel" id="n-adjust">
+        <label class="lbl">Filter preset</label>
+        <select id="fPreset">
+          <option value="">None</option>
+          <option value="bw">Black &amp; white</option>
+          <option value="noir">Noir</option>
+          <option value="sepia">Sepia</option>
+          <option value="vintage">Vintage</option>
+          <option value="warm">Warm</option>
+          <option value="cool">Cool</option>
+          <option value="vivid">Vivid</option>
+        </select>
+        <div class="field" data-id="fb" data-label="Brightness" data-min="0" data-max="200" data-step="1" data-val="100" data-unit="%"></div>
+        <div class="field" data-id="fc" data-label="Contrast" data-min="0" data-max="200" data-step="1" data-val="100" data-unit="%"></div>
+        <div class="field" data-id="fs" data-label="Saturation" data-min="0" data-max="300" data-step="1" data-val="100" data-unit="%"></div>
+        <div class="field" data-id="fh" data-label="Hue" data-min="0" data-max="360" data-step="1" data-val="0" data-unit="&deg;"></div>
+        <div class="field" data-id="fbl" data-label="Blur" data-min="0" data-max="20" data-step="0.5" data-val="0" data-unit="px"></div>
+        <label class="lbl">Fit in frame</label>
+        <select id="fFit">
+          <option value="contain">Fit (show everything)</option>
+          <option value="cover">Fill (crop edges)</option>
+        </select>
+        <div class="grid2">
+          <button id="fAll">Apply look to all clips</button>
+          <button id="fReset">Reset adjustments</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- ANIMATE -->
+    <section class="panel" id="p-animate">
+      <div class="needsel" id="n-animate">
+        <div class="field" data-id="sc" data-label="Scale" data-min="10" data-max="300" data-step="1" data-val="100" data-unit="%"></div>
+        <div class="field" data-id="px" data-label="Position X" data-min="-100" data-max="100" data-step="1" data-val="0" data-unit="%"></div>
+        <div class="field" data-id="py" data-label="Position Y" data-min="-100" data-max="100" data-step="1" data-val="0" data-unit="%"></div>
+        <div class="field" data-id="rot" data-label="Rotation" data-min="-180" data-max="180" data-step="1" data-val="0" data-unit="&deg;"></div>
+        <div class="field" data-id="op" data-label="Opacity" data-min="0" data-max="100" data-step="1" data-val="100" data-unit="%"></div>
+        <div class="grid2">
+          <button id="kAdd" class="accent">&#9670; Add keyframe here</button>
+          <button id="kDel">Remove keyframe here</button>
+        </div>
+        <div class="grid2">
+          <button id="kIn">Ken Burns: zoom in</button>
+          <button id="kOut">Ken Burns: zoom out</button>
+        </div>
+        <div class="grid2">
+          <button id="kClear">Clear keyframes</button>
+          <button id="kReset">Reset transform</button>
+        </div>
+        <div id="kList" class="chips"></div>
+        <div class="hint">Move the playhead, change a value, then add a keyframe. Once a clip has keyframes, changing a value at another time creates a new keyframe automatically. You can also drag the picture in the preview.</div>
+      </div>
+    </section>
+
+    <!-- TEXT -->
+    <section class="panel" id="p-text">
+      <label class="lbl">Motion graphics templates (added at the playhead)</label>
+      <div class="chips tpl">
+        <button data-tpl="title">Title card</button>
+        <button data-tpl="lower">Lower third</button>
+        <button data-tpl="cta">Subscribe</button>
+        <button data-tpl="type">Typewriter</button>
+        <button data-tpl="caption">Caption</button>
+      </div>
+      <div class="grid3">
+        <button id="tAdd">+ Text</button>
+        <button id="tDup">Duplicate</button>
+        <button id="tDel" class="danger">Delete</button>
+      </div>
+      <select id="tSel"></select>
+      <div class="needsel" id="n-text">
+        <input type="text" id="tText" placeholder="Type your text">
+        <div class="field" data-id="tSize" data-label="Size" data-min="20" data-max="220" data-step="1" data-val="64" data-unit=""></div>
+        <div class="grid2">
+          <label class="colorlbl">Text color <input type="color" id="tColor" value="#ffffff"></label>
+          <label class="colorlbl">Box color <input type="color" id="tBg" value="#6d4cff"></label>
+        </div>
+        <div class="grid2">
+          <label class="check"><input type="checkbox" id="tBgOn"> Background box</label>
+          <label class="check"><input type="checkbox" id="tBold" checked> Bold</label>
+        </div>
+        <label class="lbl">Animation</label>
+        <select id="tAnim">
+          <option value="none">None</option>
+          <option value="fade">Fade</option>
+          <option value="up">Slide up</option>
+          <option value="left">Slide from left</option>
+          <option value="pop">Pop</option>
+          <option value="type">Typewriter</option>
+        </select>
+        <div class="grid2">
+          <label class="lbl">Starts at (s)<input type="number" id="tFrom" min="0" step="0.1"></label>
+          <label class="lbl">Ends at (s)<input type="number" id="tTo" min="0" step="0.1"></label>
+        </div>
+        <button id="tNow">Start at playhead</button>
+        <div class="hint">Drag the text in the preview to move it.</div>
+      </div>
+    </section>
+
+    <!-- AUDIO -->
+    <section class="panel" id="p-audio">
+      <label class="filebtn">+ Add music / voice
+        <input type="file" id="addAudio" accept="audio/*" multiple hidden>
+      </label>
+      <select id="aSel"></select>
+      <div class="needsel" id="n-audio">
+        <canvas id="aWave" height="84"></canvas>
+        <div class="hint">Tap the waveform to move the playhead. Drag the sliders to trim.</div>
+        <div class="field" data-id="aVol" data-label="Volume" data-min="0" data-max="200" data-step="1" data-val="80" data-unit="%"></div>
+        <div class="field" data-id="aIn" data-label="Trim start" data-min="0" data-max="10" data-step="0.05" data-val="0" data-unit="s"></div>
+        <div class="field" data-id="aOut" data-label="Trim end" data-min="0.1" data-max="10" data-step="0.05" data-val="10" data-unit="s"></div>
+        <div class="field" data-id="aFi" data-label="Fade in" data-min="0" data-max="10" data-step="0.1" data-val="0" data-unit="s"></div>
+        <div class="field" data-id="aFo" data-label="Fade out" data-min="0" data-max="10" data-step="0.1" data-val="0" data-unit="s"></div>
+        <label class="lbl">Starts at (s)<input type="number" id="aStart" min="0" step="0.1" value="0"></label>
+        <div class="grid2">
+          <button id="aNow">Start at playhead</button>
+          <button id="aDel" class="danger">Remove track</button>
+        </div>
+        <label class="lbl">Clean up this track</label>
+        <div class="field" data-id="aNr" data-label="Noise reduction strength" data-min="1" data-max="100" data-step="1" data-val="60" data-unit="%"></div>
+        <div class="grid2">
+          <button id="aDenoise" class="accent">Reduce noise</button>
+          <button id="aNorm">Normalize volume</button>
+        </div>
+        <button id="aHpf">Remove low rumble</button>
+        <div class="hint">Noise reduction learns the hiss from the quietest parts of the track, so it works best on voice with short pauses. Processing happens on your phone.</div>
+      </div>
+      <label class="lbl">Sound from a video clip</label>
+      <div class="hint">Select a video clip in the timeline, then:</div>
+      <div class="grid2">
+        <button id="aExtract">Extract audio to a track</button>
+        <label class="check"><input type="checkbox" id="aMute" checked> Mute the clip</label>
+      </div>
+    </section>
+
+    <!-- CAPTIONS -->
+    <section class="panel" id="p-captions">
+      <label class="lbl">Language spoken in the video</label>
+      <select id="cLang">
+        <option value="auto">Auto-detect</option>
+        <option value="en">English</option>
+        <option value="bn">Bengali (বাংলা)</option>
+        <option value="hi">Hindi</option>
+        <option value="ur">Urdu</option>
+        <option value="ar">Arabic</option>
+        <option value="es">Spanish</option>
+      </select>
+      <label class="lbl">Engine</label>
+      <select id="cEngine">
+        <option value="groq">Cloud: Groq Whisper (best, free key)</option>
+        <option value="local">On this phone (private, slower)</option>
+      </select>
+      <div id="cGroqBox">
+        <input type="password" id="cKey" placeholder="Groq API key (gsk_…)" autocomplete="off">
+        <div class="hint">Get a free key at console.groq.com. It is kept only on this phone and your audio is sent to Groq for transcription. Best accuracy for Bengali.</div>
+        <button id="cKeyClear">Forget key</button>
+      </div>
+      <div id="cLocalBox">
+        <label class="lbl">Model size</label>
+        <select id="cModel">
+          <option value="whisper-tiny">Tiny (about 40 MB, fastest, low accuracy)</option>
+          <option value="whisper-base" selected>Base (about 75 MB)</option>
+          <option value="whisper-small">Small (about 250 MB, slow, better)</option>
+        </select>
+        <div class="hint">Downloads once, then works offline. Bengali is much more accurate with the cloud engine.</div>
+      </div>
+      <button id="cGen" class="big green">Create captions</button>
+      <div class="grid3">
+        <button id="cAdd">+ Add</button>
+        <label class="filebtn">Import SRT<input type="file" id="cSrtIn" accept=".srt,text/plain" hidden></label>
+        <button id="cSrtOut">Export SRT</button>
+      </div>
+      <div class="grid2">
+        <button id="cClear" class="danger">Delete all</button>
+        <label class="lbl">Shift all (s)<input type="number" id="cShift" step="0.1" value="0"></label>
+      </div>
+      <button id="cShiftGo">Apply shift</button>
+      <div id="cList"></div>
+      <label class="lbl">Caption style</label>
+      <div class="field" data-id="cSize" data-label="Size" data-min="20" data-max="110" data-step="1" data-val="46" data-unit=""></div>
+      <div class="field" data-id="cY" data-label="Vertical position" data-min="10" data-max="95" data-step="1" data-val="80" data-unit="%"></div>
+      <div class="grid2">
+        <label class="colorlbl">Text color <input type="color" id="cColor" value="#ffffff"></label>
+        <label class="colorlbl">Box color <input type="color" id="cBg" value="#000000"></label>
+      </div>
+      <div class="grid2">
+        <label class="check"><input type="checkbox" id="cBgOn" checked> Background box</label>
+        <label class="check"><input type="checkbox" id="cUpper"> UPPERCASE</label>
+      </div>
+      <select id="cAnim">
+        <option value="none">No animation</option>
+        <option value="fade">Fade</option>
+        <option value="pop" selected>Pop</option>
+      </select>
+      <div class="hint">Captions are drawn on the video and included in every export. Edit text and times in the list above.</div>
+    </section>
+
+    <!-- CUTOUT -->
+    <section class="panel" id="p-cutout">
+      <div id="bgInfo" class="hint">Select a video or image clip on the timeline.</div>
+      <div id="n-cutout">
+        <label class="check"><input type="checkbox" id="bgOn"> Remove background</label>
+        <label class="lbl">Method</label>
+        <select id="bgType">
+          <option value="chroma">Color key (green screen or plain wall)</option>
+          <option value="ai">AI person cutout (no green screen needed)</option>
+        </select>
+        <div id="bgChromaOnly">
+          <div class="grid2">
+            <label class="colorlbl">Color to remove <input type="color" id="bgKey" value="#00ff00"></label>
+            <button id="bgPick">Pick from video</button>
+          </div>
+          <button id="bgAuto">Auto-detect from corners</button>
+          <div class="field" data-id="bgSim" data-label="Tolerance" data-min="0" data-max="100" data-step="1" data-val="35" data-unit="%"></div>
+          <div class="field" data-id="bgSpill" data-label="Remove color spill" data-min="0" data-max="100" data-step="1" data-val="50" data-unit="%"></div>
+        </div>
+        <div id="bgAiBox">
+          <div class="hint" id="bgAiStatus"></div>
+        </div>
+        <div class="field" data-id="bgSoft" data-label="Edge softness" data-min="0" data-max="50" data-step="1" data-val="12" data-unit="%"></div>
+        <div class="field" data-id="bgShift" data-label="Grow / shrink edge" data-min="-50" data-max="50" data-step="1" data-val="0" data-unit="%"></div>
+        <label class="check"><input type="checkbox" id="bgInv"> Invert (keep the background instead)</label>
+        <label class="lbl">Behind the subject</label>
+        <select id="bgFill">
+          <option value="none">Transparent (shows the layer below)</option>
+          <option value="color">Solid color</option>
+          <option value="blur">Blurred copy of the video</option>
+          <option value="image">Picture</option>
+        </select>
+        <div id="bgColorBox"><label class="colorlbl">Fill color <input type="color" id="bgColor" value="#101820"></label></div>
+        <div id="bgBlurBox"><div class="field" data-id="bgBlur" data-label="Blur amount" data-min="2" data-max="60" data-step="1" data-val="20" data-unit="px"></div></div>
+        <div id="bgImgBox"><label class="filebtn">Choose picture<input type="file" id="bgImg" accept="image/*" hidden></label></div>
+        <div class="hint">Tip: for a transparent result, put another clip on the timeline under this one’s time range (overlap them) or pick a fill. Exported videos include the cutout.</div>
+      </div>
+    </section>
+
+    <!-- EXPORT -->
+    <section class="panel" id="p-export">
+      <label class="lbl">Export engine</label>
+      <select id="xEngine">
+        <option value="fast" selected>Fast MP4 (recommended)</option>
+        <option value="realtime">Real-time (most compatible)</option>
+      </select>
+      <div class="hint" id="xEngineNote"></div>
+      <label class="lbl">Aspect ratio</label>
+      <select id="xRatio">
+        <option>9:16</option>
+        <option>16:9</option>
+        <option>1:1</option>
+        <option>4:5</option>
+      </select>
+      <label class="lbl">Export resolution</label>
+      <select id="xRes">
+        <option value="540">540p (small file)</option>
+        <option value="720" selected>720p HD</option>
+        <option value="1080">1080p Full HD</option>
+      </select>
+      <label class="lbl">Frame rate</label>
+      <select id="xFps">
+        <option value="24">24 fps</option>
+        <option value="30" selected>30 fps</option>
+        <option value="60">60 fps</option>
+      </select>
+      <label class="lbl">Quality</label>
+      <select id="xBit">
+        <option value="2500000">Low (smaller file)</option>
+        <option value="5000000" selected>Medium</option>
+        <option value="10000000">High</option>
+      </select>
+      <div id="xFmtWrap">
+        <label class="lbl">Format</label>
+        <select id="xFmt"></select>
+      </div>
+      <label class="lbl">Preview quality</label>
+      <select id="xPrev">
+        <option value="360">Fast (360p)</option>
+        <option value="540" selected>Normal (540p)</option>
+        <option value="720">Sharp (720p)</option>
+      </select>
+      <div class="grid2">
+        <label class="colorlbl">Background <input type="color" id="xBg" value="#000000"></label>
+        <span></span>
+      </div>
+      <div class="grid2">
+        <label class="check"><input type="checkbox" id="xLb"> Cinematic bars</label>
+        <label class="check"><input type="checkbox" id="xVig"> Vignette</label>
+      </div>
+      <button id="xBtn" class="big green">Export video</button>
+      <div class="hint">Keep Vided open and the screen on until the export finishes.</div>
+      <video id="xOut" controls playsinline></video>
+      <a id="xDl" class="big green" style="display:none">Download video</a>
+      <button id="xShare" class="big" style="display:none">Share</button>
+    </section>
+
+    <!-- PROJECT -->
+    <section class="panel" id="p-project">
+      <label class="lbl">Project name</label>
+      <input type="text" id="pName" value="Untitled project" placeholder="My project">
+      <div class="grid2">
+        <button id="pSave" class="accent">Save now</button>
+        <button id="pNew">New project</button>
+      </div>
+      <div class="hint" id="pStatus">Projects save automatically on this phone, together with your video, image and audio files.</div>
+      <label class="lbl">Saved projects</label>
+      <div id="pList"></div>
+      <div class="hint" id="pStorage"></div>
+    </section>
+
+  </main>
+</div>
+
+<div id="ied">
+  <div class="ied-top">
+    <button id="iedCancel">Cancel</button>
+    <span>Edit image</span>
+    <button id="iedApply" class="accent">Done</button>
+  </div>
+  <div id="iedStage"><canvas id="iedCv"></canvas></div>
+  <div class="ied-tabs">
+    <button data-it="crop" class="active">Crop</button>
+    <button data-it="erase">Eraser</button>
+    <button data-it="adjust">Adjust</button>
+    <button data-it="xform">Rotate</button>
+  </div>
+  <div class="ied-tools">
+    <div class="ied-panel active" id="it-crop">
+      <div class="chips">
+        <button data-r="0" class="on">Free</button>
+        <button data-r="1">1:1</button>
+        <button data-r="0.5625">9:16</button>
+        <button data-r="1.7778">16:9</button>
+        <button data-r="0.8">4:5</button>
+        <button data-r="0.75">3:4</button>
+      </div>
+      <button id="ieCrop" class="accent">Apply crop</button>
+      <div class="hint">Drag the corners or the box, then tap “Apply crop”.</div>
     </div>
-    <div class="zoom" data-for="scanCv">
-      <button class="z" data-d="-1">−</button><span>Zoom</span><button class="z" data-d="1">＋</button>
-      <button class="b alt sm" id="rotBtn">↻ Rotate</button>
-      <button class="b alt sm" id="cornBtn">⌖ Adjust corners</button>
+    <div class="ied-panel" id="it-erase">
+      <div class="chips">
+        <button data-mode="erase" class="on">Erase</button>
+        <button data-mode="restore">Restore</button>
+        <button data-mode="magic">Magic erase</button>
+      </div>
+      <div id="ieBrushBox">
+        <div class="field" data-id="ieSize" data-label="Brush size" data-min="10" data-max="160" data-step="1" data-val="50" data-unit="px"></div>
+        <div class="field" data-id="ieSoft" data-label="Softness" data-min="0" data-max="100" data-step="1" data-val="40" data-unit="%"></div>
+      </div>
+      <div id="ieMagicBox" style="display:none">
+        <div class="field" data-id="ieTol" data-label="Tolerance" data-min="1" data-max="100" data-step="1" data-val="25" data-unit="%"></div>
+        <div class="hint">Tap a color to erase that whole area (for example a plain background).</div>
+      </div>
     </div>
-    <div class="cvwrap" id="scanWrap"><canvas id="scanCv"></canvas></div>
-    <p class="hint">If a bubble was missed or detected wrongly, tap that option to fix it. Tap again to remove the circle.</p>
-
-    <div class="card">
-      <button class="b tm" id="timerBtn"></button>
-      <button class="b" id="submitBtn">✅ Submit</button>
+    <div class="ied-panel" id="it-adjust">
+      <select id="iePreset">
+        <option value="">No filter</option>
+        <option value="bw">Black &amp; white</option>
+        <option value="noir">Noir</option>
+        <option value="sepia">Sepia</option>
+        <option value="vintage">Vintage</option>
+        <option value="warm">Warm</option>
+        <option value="cool">Cool</option>
+        <option value="vivid">Vivid</option>
+      </select>
+      <div class="field" data-id="ieB" data-label="Brightness" data-min="0" data-max="200" data-step="1" data-val="100" data-unit="%"></div>
+      <div class="field" data-id="ieC" data-label="Contrast" data-min="0" data-max="200" data-step="1" data-val="100" data-unit="%"></div>
+      <div class="field" data-id="ieS" data-label="Saturation" data-min="0" data-max="300" data-step="1" data-val="100" data-unit="%"></div>
+      <div class="field" data-id="ieH" data-label="Hue" data-min="0" data-max="360" data-step="1" data-val="0" data-unit="&deg;"></div>
+      <div class="field" data-id="ieBl" data-label="Blur" data-min="0" data-max="20" data-step="0.5" data-val="0" data-unit="px"></div>
+      <div class="grid2">
+        <button id="ieAdj" class="accent">Apply adjustments</button>
+        <button id="ieAdjReset">Reset</button>
+      </div>
     </div>
-
-    <div id="resBox" class="card" hidden>
-      <div class="row"><span>Correct</span><b id="rC"></b></div>
-      <div class="row"><span>Wrong</span><b id="rW"></b></div>
-      <div class="row"><span>Unanswered</span><b id="rB"></b></div>
-      <div class="row"><span>Total marks</span><b id="rM"></b></div>
-      <div class="row"><span>Wrong-answer penalty</span><b id="rN"></b></div>
-      <div class="row"><span>Second Timer penalty</span><b id="rT"></b></div>
-      <div style="text-align:center;margin:12px 0 4px">Score<div class="big" id="rF"></div></div>
-      <div class="hint" id="rS" style="text-align:center"></div>
-      <button class="b" id="nextBtn">➕ Next student</button>
-      <button class="b alt" id="stuPdf">⬇ This student's PDF</button>
+    <div class="ied-panel" id="it-xform">
+      <div class="grid2">
+        <button id="ieRotL">&#8634; Rotate left</button>
+        <button id="ieRotR">Rotate right &#8635;</button>
+        <button id="ieFlipH">Flip horizontal</button>
+        <button id="ieFlipV">Flip vertical</button>
+      </div>
     </div>
-  </div>
-</section>
-
-<!-- RESULTS -->
-<section id="v-res">
-  <div class="card">
-    <label>Answer key</label>
-    <select id="resKey"></select>
-    <button class="b" id="pdfAll">⬇ Merit list (PDF)</button>
-    <button class="b alt" id="pdfEach">⬇ All students — one page each (PDF)</button>
-    <button class="b alt" id="resCsv">⬇ CSV</button>
-    <button class="b alt" id="resSync">🔄 Refresh</button>
-    <div id="pdfMsg" class="msg"></div>
-    <p class="hint">Ranked by marks, highest first. Top 3 in green, students below the pass mark in red. The PDF file is downloaded to your phone. Heading and logo: Settings tab.</p>
-    <div id="resList"></div>
-  </div>
-</section>
-
-
-<!-- SHEETS / TEMPLATES -->
-<section id="v-tpl">
-  <div class="card">
-    <b>Your OMR sheet types</b>
-    <div id="tplList"></div>
-    <button class="b alt" id="sheetDl">⬇ Download built-in blank sheet (to print)</button>
-  </div>
-
-  <div class="card" id="wizStart">
-    <b>Add any OMR sheet</b>
-    <p class="hint">Take a clear photo of a <b>blank</b> (unmarked) copy of your OMR sheet. The app finds every bubble and learns the layout. Works for any number of questions, columns, or options. You can fix anything it gets wrong before saving.</p>
-    <button class="b" id="wizCam">📷 Photo of blank sheet</button>
-    <button class="b alt" id="wizGal">🖼 Choose from gallery</button>
-    <input type="file" id="wizCamIn" accept="image/*" capture="environment" hidden>
-    <input type="file" id="wizGalIn" accept="image/*" hidden>
-    <div id="wizMsg" class="msg"></div>
-  </div>
-
-  <div class="card" id="wizEdit" hidden>
-    <b>Check the detected layout</b>
-    <div id="wizInfo" class="hint"></div>
-    <div class="two">
-      <div><label>Options per question</label>
-        <select id="wK"><option value="0">Auto-detect</option><option>2</option><option>3</option><option>4</option><option>5</option><option>6</option><option>7</option><option>8</option><option>10</option></select></div>
-      <div><label>Options run</label>
-        <select id="wDir"><option value="0">Left → right (across)</option><option value="1">Top → bottom (down)</option></select></div>
-      <div><label>Question numbering</label>
-        <select id="wNum">
-          <option value="col">Down each column, then next column</option>
-          <option value="row">Across each row</option>
-          <option value="block">By blocks (block by block, band by band)</option>
-        </select></div>
-      <div><label>Option labels</label>
-        <select id="wLab"><option value="A">A B C D …</option><option value="a">a b c d …</option><option value="1">1 2 3 4 …</option></select></div>
+    <div class="grid2 ied-undo">
+      <button id="iedUndo">Undo</button>
+      <button id="iedRevert" class="danger">Revert all</button>
     </div>
-    <label>Detection sensitivity (higher finds fainter bubble outlines)</label>
-    <input type="range" id="wSens" min="0.75" max="0.95" step="0.01" value="0.85">
-    <label>Sheet name</label>
-    <input id="wName" placeholder="e.g. School Exam Sheet 50Q">
-    <p class="hint">Red circles = detected bubbles with their question number. Tap a bubble to remove a false detection; tap an empty spot to add a missed bubble.</p>
-    <div class="zoom" data-for="wizCv"><button class="z" data-d="-1">−</button><span>Zoom</span><button class="z" data-d="1">＋</button>
-      <button class="b alt sm" id="wUndo">↶ Undo</button><button class="b alt sm" id="wCorn">⌖ Adjust corners</button></div>
-    <div class="cvwrap"><canvas id="wizCv"></canvas></div>
-    <button class="b" id="wSave">💾 Save sheet type</button>
-    <button class="b alt" id="wCancel">Cancel</button>
-    <div id="wMsg" class="msg"></div>
-  </div>
-</section>
-
-<!-- SETTINGS -->
-<section id="v-set">
-  <div class="card">
-    <b>Marking rules &amp; result sheet</b>
-    <p class="hint" id="wsNote"></p>
-    <label>Marks per correct answer</label><input id="sPer" type="number" step="0.01">
-    <label>Penalty per wrong answer</label><input id="sNeg" type="number" step="0.01">
-    <label>Second Timer penalty (% of total marks)</label><input id="sTim" type="number" step="0.1">
-    <label>Pass mark % (students below this are shown in red)</label><input id="sPass" type="number" step="1">
-    <label>Result sheet heading — line 1 (e.g. institute name)</label><input id="hL1" placeholder="e.g. AUTHENTIC University &amp; Nursing Admission Coaching">
-    <label>Line 2 (e.g. Session)</label><input id="hL2" placeholder="e.g. Session: 2026 - 27">
-    <label>Line 3 (exam title — leave empty to use the answer key name)</label><input id="hL3" placeholder="e.g. Analytical Ability Model Test - 02">
-    <label>Line 4</label><input id="hL4" placeholder="Result Sheet">
-    <label>Logo (shown at the left of the heading)</label>
-    <img id="logoPrev" class="logoPrev" alt="" hidden>
-    <input type="file" id="logoIn" accept="image/*">
-    <button class="b alt sm" id="logoDel" hidden>Remove logo</button>
-    <button class="b" id="sSave">💾 Save for this workspace</button>
-    <div id="sMsg" class="msg"></div>
-  </div>
-  <div class="card">
-    <b>This phone</b>
-    <label>Mark detection threshold (0.05–0.5; lower detects fainter marks)</label><input id="sThr" type="number" step="0.01">
-    <label>Minimum fill % for a valid answer (30–95; a bubble filled less than this counts as partial = wrong)</label><input id="sFill" type="number" step="1">
-    <button class="b alt" id="dSave">💾 Save</button>
-    <div id="dMsg" class="msg"></div>
-  </div>
-  <div class="card">
-    <b>Install the app</b>
-    <p class="hint">Android / Chrome: use the “Install” button at the top, or the browser menu → “Install app / Add to Home screen”.</p>
-    <p class="hint" id="iosHint" hidden>iPhone: in Safari tap Share → “Add to Home Screen”.</p>
-  </div>
-</section>
-
-<!-- GROUPS -->
-<section id="v-grp">
-  <div class="card">
-    <b>Invitations for you</b>
-    <div id="invIn"></div>
-  </div>
-  <div class="card">
-    <b>Create a group</b>
-    <p class="hint">A group shares answer keys and scanned results between its members. A user can be in several groups. Members of one group cannot see another group's data.</p>
-    <div class="sm2"><input id="gName" placeholder="Group name (optional)"><button class="b" id="gCreate">＋ Create</button></div>
-    <div id="gMsg" class="msg"></div>
-  </div>
-  <div id="grpList"></div>
-</section>
-
-<!-- PROFILE -->
-<section id="v-prof">
-  <div class="card">
-    <b id="pName"></b><span class="chip" id="pRole"></span>
-    <div class="hint" id="pId"></div>
-    <label>Change password</label>
-    <input id="pwOld" type="password" placeholder="Current password" autocomplete="current-password">
-    <input id="pwNew" type="password" placeholder="New password (6+ characters)" style="margin-top:6px" autocomplete="new-password">
-    <button class="b" id="pwSave">Change password</button>
-    <button class="b red" id="logoutBtn">Log out</button>
-    <div id="pwMsg" class="msg"></div>
-  </div>
-  <div class="card">
-    <b>All users</b>
-    <input id="uSearch" placeholder="Search name or ID" style="margin-top:6px">
-    <label>Invite to group</label><select id="invGroup"></select>
-    <div id="uList"></div>
-  </div>
-</section>
-
-<!-- ADMIN -->
-<section id="v-adm">
-  <div class="card">
-    <b>All groups</b> <button class="b alt sm" id="admRef">🔄 Refresh</button>
-    <div id="admGroups"></div>
-  </div>
-  <div class="card">
-    <b>Recent activity</b>
-    <div id="admAct"></div>
-  </div>
-</section>
-
-</main>
-
-<!-- Corner editor overlay -->
-<div id="cornerOv"><div class="box">
-  <p id="cornerHint"></p>
-  <canvas id="cornerCv"></canvas>
-  <div>
-    <button class="b" id="cornerOk">✔ Done</button>
-    <button class="b alt" id="cornerRot">↻ Rotate corner labels</button>
-    <button class="b red" id="cornerCancel">Cancel</button>
-  </div>
-</div></div>
-
-<div id="authOv">
-  <div class="box">
-    <h2>OMR Scanner</h2>
-    <div class="hint">Log in to continue.</div>
-    <div class="tabs"><button id="aTabIn" class="on">Log in</button><button id="aTabUp">New user</button></div>
-    <div id="aIn">
-      <label>ID (mobile number)</label><input id="aId" inputmode="text" autocomplete="username">
-      <label>Password</label><input id="aPw" type="password" autocomplete="current-password">
-      <button class="b" id="aLogin">Log in</button>
-    </div>
-    <div id="aUp" hidden>
-      <label>Your name</label><input id="aName" autocomplete="name">
-      <label>Mobile number (this will be your ID)</label><input id="aMob" inputmode="tel" autocomplete="tel">
-      <button class="b" id="aReg">Get my ID &amp; password</button>
-      <div id="aCred" class="cred" hidden></div>
-    </div>
-    <details style="margin-top:12px"><summary class="hint">Server address</summary>
-      <input id="aUrl" placeholder="https://script.google.com/macros/s/.../exec">
-    </details>
-    <div id="aMsg" class="msg"></div>
   </div>
 </div>
-<script src="omr-core.js"></script>
+
+<div id="busy">
+  <div class="box">
+    <div id="busyMsg">Exporting… keep this screen open</div>
+    <progress id="busyProg" value="0" max="1"></progress>
+    <button id="busyCancel" class="danger">Cancel</button>
+  </div>
+</div>
+<div id="toast"></div>
+
+<script src="mux.js"></script>
+<script src="demux.js"></script>
 <script src="app.js"></script>
+<script src="export.js"></script>
+<script src="imgedit.js"></script>
+<script src="audio.js"></script>
+<script src="captions.js"></script>
+<script src="cutout.js"></script>
+<script src="store.js"></script>
+<script>
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.register('sw.js').catch(function () {});
+}
+</script>
 </body>
 </html>
