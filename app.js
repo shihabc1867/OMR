@@ -689,9 +689,9 @@
   // ---------- settings ----------
   // ---------- network + outbox (changes are kept on the phone until the server has them) ----------
   let outbox = LS.get('omr_out', []), flushing = null;
-  const trErr = e => (e === 'network' ? 'Cannot reach the server. Check the internet connection and the server address.' : e);
+  const trErr = e => (e === 'network' ? 'Cannot reach the server. Check the internet connection and the secret key.' : e);
   async function apiTo(url, action, payload) {
-    if (!url) return { ok: false, error: 'The server address is missing.' };
+    if (!url) return { ok: false, error: 'The secret key is missing.' };
     try {
       const res = await fetch(url, { method: 'POST', body: JSON.stringify(Object.assign({ action, token: A && A.token }, payload)) });
       const r = await res.json();
@@ -723,10 +723,32 @@
 
   // ---------- log in / new user ----------
   const amsg = (t, ok) => { const m = $('#aMsg'); m.textContent = t || ''; m.className = 'msg' + (ok ? ' ok' : ''); };
+  // Secret key = server address + secret, written as  OMR.<deployment id>.<secret>.<check>  (an old-style server address is still accepted)
+  const KEYRE = /^https:\/\/script\.google\.com\/macros\/s\/([\w-]+)\/exec\/?$/;
+  const kchk = s => { let n = 0; for (let i = 0; i < s.length; i++) n = (n * 31 + s.charCodeAt(i)) % 1296; return ('0' + n.toString(36)).slice(-2); };
+  function makeKey(url, secret) { const m = KEYRE.exec(String(url || '')); if (!m) return ''; const body = 'OMR.' + m[1] + '.' + (secret || ''); return body + '.' + kchk(body); }
+  function parseKey(s) {
+    s = String(s || '').trim().replace(/\s+/g, '');
+    if (!s) return { error: 'Paste the secret key your admin gave you (tap “Secret key” below).' };
+    if (/^https?:\/\//i.test(s)) return { url: s, secret: '' };
+    const p = s.split('.');
+    if (p.length !== 4 || p[0] !== 'OMR' || !/^[\w-]+$/.test(p[1]) || !/^[A-Za-z0-9]*$/.test(p[2]) || p[3] !== kchk(p[0] + '.' + p[1] + '.' + p[2])) return { error: 'This secret key does not look right. Copy the whole key again.' };
+    return { url: 'https://script.google.com/macros/s/' + p[1] + '/exec', secret: p[2] };
+  }
+  let linkNote = '';
+  (function keyFromLink() {      // login link:  .../index.html#k=<key>
+    const m = /[#?&]k=([^&]+)/.exec((location.hash || '') + (location.search || '')); if (!m) return;
+    let k = ''; try { k = decodeURIComponent(m[1]); } catch (e) { k = m[1]; }
+    const pk = parseKey(k); history.replaceState(null, '', location.pathname);
+    if (pk.error) { linkNote = pk.error; return; }
+    const same = A && A.url === pk.url;
+    A = { url: pk.url, appKey: pk.secret, token: same ? A.token : '', user: same ? A.user : null }; LS.set('omr_auth', A);
+    linkNote = same ? '' : 'Secret key saved. Now enter your ID and password.';
+  })();
   function showAuth(msg) {
-    $('#aUrl').value = (A && A.url) || oldSet.url || '';
-    if (!$('#aUrl').value) $('#aUrl').closest('details').open = true;
-    $('#authOv').classList.add('on'); amsg(msg || '', false);
+    const k = A && A.url ? (makeKey(A.url, A.appKey) || A.url) : (oldSet.url || '');
+    $('#aKey').value = k; $('#aKeyBox').open = !k; $('#aKeySum').textContent = k ? 'Secret key ✔ saved on this phone' : 'Secret key';
+    $('#authOv').classList.add('on'); amsg(msg || linkNote || '', !msg && !!linkNote); linkNote = '';
   }
   function sessionExpired() {
     if (!A || !A.token) return; A.token = ''; LS.set('omr_auth', A);
@@ -735,22 +757,22 @@
   const authTab = up => { $('#aIn').hidden = up; $('#aUp').hidden = !up; $('#aTabIn').classList.toggle('on', !up); $('#aTabUp').classList.toggle('on', up); amsg(''); };
   $('#aTabIn').onclick = () => authTab(false); $('#aTabUp').onclick = () => authTab(true);
   $('#aLogin').onclick = async () => {
-    const url = $('#aUrl').value.trim(), id = $('#aId').value.trim(), pw = $('#aPw').value;
-    if (!url) { amsg('Open “Server address” below and paste the web app address.'); $('#aUrl').closest('details').open = true; return; }
+    const pk = parseKey($('#aKey').value), id = $('#aId').value.trim(), pw = $('#aPw').value;
+    if (pk.error) { amsg(pk.error); $('#aKeyBox').open = true; return; }
     if (!id || !pw) { amsg('Enter your ID and password.'); return; }
     amsg('Logging in…', true);
-    const r = await apiTo(url, 'login', { id, password: pw });
+    const r = await apiTo(pk.url, 'login', { id, password: pw, appKey: pk.secret });
     if (!r.ok) { amsg(trErr(r.error)); return; }
-    A = { url, token: r.token, user: r.user }; LS.set('omr_auth', A); $('#aPw').value = '';
+    A = { url: pk.url, appKey: pk.secret, token: r.token, user: r.user }; LS.set('omr_auth', A); $('#aPw').value = '';
     await startSession(r.defaultPassword);
   };
   $('#aPw').onkeydown = e => { if (e.key === 'Enter') $('#aLogin').click(); };
   $('#aReg').onclick = async () => {
-    const url = $('#aUrl').value.trim(), name = $('#aName').value.trim(), mob = $('#aMob').value.trim();
-    if (!url) { amsg('Open “Server address” below and paste the web app address.'); $('#aUrl').closest('details').open = true; return; }
+    const pk = parseKey($('#aKey').value), name = $('#aName').value.trim(), mob = $('#aMob').value.trim();
+    if (pk.error) { amsg(pk.error); $('#aKeyBox').open = true; return; }
     if (!name || !mob) { amsg('Enter your name and mobile number.'); return; }
     amsg('Creating your account…', true);
-    const r = await apiTo(url, 'register', { name, mobile: mob });
+    const r = await apiTo(pk.url, 'register', { name, mobile: mob, appKey: pk.secret });
     if (!r.ok) { amsg(trErr(r.error)); return; }
     const c = $('#aCred'); c.hidden = false;
     c.innerHTML = 'Your ID: <b>' + esc(r.id) + '</b><br>Your password: <b>' + esc(r.password) + '</b><br><span class="hint">Write these down or take a screenshot. You can change the password after logging in.</span><br><button class="b" id="aGo">Continue to log in</button>';
@@ -761,7 +783,7 @@
     if (outbox.length && !confirm('Some changes are not uploaded yet and will be lost. Log out anyway?')) return;
     if (!outbox.length && !confirm('Log out?')) return;
     Object.keys(localStorage).forEach(k => { if (/^omr_(w_|ws_|dir|out|keys|results)/.test(k)) localStorage.removeItem(k); });
-    LS.set('omr_auth', { url: A ? A.url : '' }); location.reload();
+    LS.set('omr_auth', { url: A ? A.url : '', appKey: A ? A.appKey || '' : '' }); location.reload();
   };
 
   // ---------- workspaces (my own, or a group) ----------
@@ -953,6 +975,31 @@
     if (r.ok) { $('#gName').value = ''; renderGroups(); }
   };
 
+  // ---------- secret key card (admin) ----------
+  let keyInfo = null;
+  async function renderKeyCard() {
+    const card = $('#keyCard'); card.hidden = !isAdmin(); if (!isAdmin() || !A || !A.url) return;
+    if (!keyInfo) { const r = await api('getAppKey', {}); if (!r || !r.ok) { $('#kyMsg').textContent = r && r.error ? trErr(r.error) : ''; return; } keyInfo = { secret: r.secret, required: r.required }; }
+    const key = makeKey(A.url, keyInfo.secret); $('#kyVal').value = key || 'The server address is not a standard Google Apps Script address, so a key cannot be made. Share the address itself.'; $('#kyReq').checked = !!keyInfo.required;
+  }
+  const kmsg = (t, ok) => { const m = $('#kyMsg'); m.textContent = t; m.className = 'msg' + (ok ? ' ok' : ''); };
+  async function copyText(t, what) {
+    try { await navigator.clipboard.writeText(t); kmsg('✔ ' + what + ' copied.', true); } catch (e) { window.prompt('Copy this ' + what + ':', t); }
+  }
+  $('#kyCopy').onclick = () => { const k = $('#kyVal').value; if (/^OMR\./.test(k)) copyText(k, 'key'); };
+  $('#kyLink').onclick = () => { const k = $('#kyVal').value; if (/^OMR\./.test(k)) copyText(location.origin + location.pathname + '#k=' + encodeURIComponent(k), 'login link'); };
+  $('#kyReq').onchange = async e => {
+    const on = e.target.checked;
+    if (on && !confirm('From now on nobody can log in or sign up without the secret key.\n\nMake sure you have already sent the key (or login link) to your users. People who are already logged in are not affected.\n\nTurn it on?')) { e.target.checked = false; return; }
+    const r = await api('setKeyRequired', { value: on });
+    if (r && r.ok) { keyInfo.required = on; kmsg(on ? '✔ Secret key is now required.' : '✔ Secret key is no longer required.', true); } else { e.target.checked = !on; kmsg(trErr(r && r.error)); }
+  };
+  $('#kyNew').onclick = async () => {
+    if (!confirm('Make a new key? The old key (and any login link you sent) stops working for new logins and sign-ups. Send the new key to your users afterwards.')) return;
+    const r = await api('newAppKey', {});
+    if (r && r.ok) { keyInfo.secret = r.secret; A.appKey = r.secret; LS.set('omr_auth', A); renderKeyCard(); kmsg('✔ New key made. Send it to your users.', true); } else kmsg(trErr(r && r.error));
+  };
+
   // ---------- Profile tab ----------
   function renderProfile() {
     if (!A || !A.user) return; userDatalist();
@@ -977,6 +1024,7 @@
       if (!confirm('Create a new password for this user?')) return;
       const r = await api('resetPassword', { id: b.dataset.rp }); if (r.ok) alert('New password: ' + r.password + '\nGive it to the user. They can change it after logging in.'); else toast(trErr(r.error));
     });
+    renderKeyCard();
     $('#uList').querySelectorAll('[data-du]').forEach(b => b.onclick = async () => {
       if (!confirm('Delete the user “' + b.dataset.dn + '” (ID ' + b.dataset.du + ')?\n\nTheir account, group memberships and their own workspace data (answer keys, results, question papers) will be deleted. Data inside groups stays.\n\nThis cannot be undone.')) return;
       const r = await api('deleteUser', { id: b.dataset.du });
