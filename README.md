@@ -101,3 +101,10 @@ The finder removes thin lines (page borders, text) before looking for solid squa
 - Heading lines (4 lines + info line) and a logo can be set per paper. Up to 60 questions fit one A4 page, more use two pages. **Preview pages** / **Download question paper (PDF)**.
 - **Save paper & answer key** stores the paper in the open workspace (everyone in a group sees it) and creates an answer key linked to the chosen OMR sheet type, ready in the Scan tab.
 - Backend: `Code.gs` has a new `Papers` sheet (created automatically). Redeploy a **New version** after pasting it.
+
+
+## Secret key login, no lock-out, admin recovery (v7)
+- Users log in with **ID + password + secret key**. The key (`OMR.<id>.<secret>.<check>`) contains the server address, so nobody pastes the long address any more. It is saved on the phone after the first login. Old-style addresses are still accepted in the same box.
+- Admin: Profile tab → **Secret key** card → Copy key / Copy login link (tapping the link fills the key automatically). "Require the secret key to log in and sign up" is **off** until the admin switches it on. "Make a new key" invalidates the old one.
+- Wrong passwords no longer lock an account for 10 minutes.
+- Forgot the admin password? Apps Script editor → choose **resetAdminPassword** → Run → read the new password in the Execution log. If everybody is locked out by the secret key, run **disableSecretKey**.
