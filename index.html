@@ -366,6 +366,17 @@ header select{width:auto;max-width:46vw;padding:6px;font-size:13px}
     <button class="b red" id="logoutBtn">Log out</button>
     <div id="pwMsg" class="msg"></div>
   </div>
+  <div class="card" id="keyCard" hidden>
+    <b>🔑 Secret key (admin)</b>
+    <div class="hint">Give this key (or the login link) to your users. They paste it once instead of the server address.</div>
+    <textarea id="kyVal" rows="3" readonly style="width:100%;font:12px monospace;margin-top:6px"></textarea>
+    <button class="b alt sm" id="kyCopy">Copy key</button>
+    <button class="b alt sm" id="kyLink">Copy login link</button>
+    <label style="display:flex;gap:6px;align-items:center;margin-top:8px"><input type="checkbox" id="kyReq" style="width:auto"> Require the secret key to log in and sign up</label>
+    <div class="hint">When this is on, nobody can log in or create an account without the key, even if they know the server address. Users who are already logged in stay logged in.</div>
+    <button class="b red sm" id="kyNew">Make a new key (old key stops working)</button>
+    <div id="kyMsg" class="msg"></div>
+  </div>
   <div class="card">
     <b>All users</b>
     <input id="uSearch" placeholder="Search name or ID" style="margin-top:6px">
@@ -415,8 +426,9 @@ header select{width:auto;max-width:46vw;padding:6px;font-size:13px}
       <button class="b" id="aReg">Get my ID &amp; password</button>
       <div id="aCred" class="cred" hidden></div>
     </div>
-    <details style="margin-top:12px"><summary class="hint">Server address</summary>
-      <input id="aUrl" placeholder="https://script.google.com/macros/s/.../exec">
+    <details style="margin-top:12px" id="aKeyBox"><summary class="hint" id="aKeySum">Secret key</summary>
+      <input id="aKey" placeholder="Paste the secret key from your admin" autocapitalize="off" autocorrect="off" spellcheck="false">
+      <div class="hint">You only need this once on a phone. If your admin sent you a login link, just tap it.</div>
     </details>
     <div id="aMsg" class="msg"></div>
   </div>
