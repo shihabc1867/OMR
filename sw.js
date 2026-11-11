@@ -1,5 +1,5 @@
 // Service worker: caches the app files so it works offline (stale-while-revalidate)
-const V = 'omr-v14';
+const V = 'omr-v15';
 const FILES = ['./', 'index.html', 'app.js', 'omr-core.js', 'live.js', 'paper.js', 'report.js', 'manifest.json', 'icon-192.png', 'icon-512.png', 'icon-maskable-192.png', 'icon-maskable-512.png'];
 
 self.addEventListener('install', e => {
