@@ -108,3 +108,12 @@ The finder removes thin lines (page borders, text) before looking for solid squa
 - Admin: Profile tab → **Secret key** card → Copy key / Copy login link (tapping the link fills the key automatically). "Require the secret key to log in and sign up" is **off** until the admin switches it on. "Make a new key" invalidates the old one.
 - Wrong passwords no longer lock an account for 10 minutes.
 - Forgot the admin password? Apps Script editor → choose **resetAdminPassword** → Run → read the new password in the Execution log. If everybody is locked out by the secret key, run **disableSecretKey**.
+
+
+## Questions tab, results and groups (v8)
+- Heading lines each have their own **B / I / U**, size (pt) and font. Question text uses Times New Roman (English) and SutonnyOMJ (Bangla), default **12 pt**, with A−/A＋. SutonnyOMJ must be installed on the phone, or add its `.ttf` once under *Fonts* (kept on the phone).
+- Inside a question: `<b>…</b> <i>…</i> <u>…</u>` (or the B/I/U buttons), maths between dollar signs (`$x^{2}$`, `$H_{2}O$`, `$\frac{a}{b}$`, `$\sqrt{x}$`, `$\alpha$ $\pi$ $\times$ $\leq$ …) and one picture per question (🖼 Picture; kept small so it fits in a Sheets cell). A live preview appears under questions that use them.
+- Pasted questions are put in the order of their numbers. ↑ ↓ ⇅ reorder questions. Options: very short → one line, medium → two per line, long → one per line.
+- "Shrink the text to fit" keeps ≤60 questions on one A4 page and more on two; switch it off to keep the exact size (more pages if needed).
+- Results tab: **Delete all results shown** (the chosen answer key, or every key); single results still have their own Delete.
+- Admin tab: **Delete** a group (removes its members, answer keys, results, papers and pictures). Backend: new sheet `PaperImages`; new actions `deleteResults`, `deleteGroup`.
