@@ -25,6 +25,7 @@
   let customTpls = LS.get('omr_templates', []);   // sheet types shared by the admin: [{id,name,W,H,ref,align,rx,ry,labels,groups}]
   let keys = {};                                  // answer keys of the open workspace: id -> {id,name,tplId,answers:{ "1":optIndex }}
   let results = [];
+  let paperImages = {};                            // question pictures of the open workspace: id -> data URL
   let papers = {};                                 // question papers of the open workspace: id -> {id,name,tplId,keyId,ls,head,qs,logo,updated,by}
   let keyState = { id: '', tplId: 'builtin', answers: {} };
   let sc = { sel: null };
@@ -34,7 +35,8 @@
   const getTpl = id => allTpls().find(t => t.id === id) || null;
   const labelOf = (tpl, o) => (tpl.labels && tpl.labels[o]) || String.fromCharCode(65 + o);
   const wsKey = id => 'omr_w_' + id;
-  const saveWsCache = () => { if (wsId) LS.set(wsKey(wsId), { keys, results, settings: WSS, logo: WLOGO, papers }); };
+  const saveWsCache = () => { if (wsId) LS.set(wsKey(wsId), { keys, results, settings: WSS, logo: WLOGO, papers });
+    try { LS.set('omr_pi_' + wsId, paperImages); } catch (e) { /* too big for this phone's storage: pictures are fetched again from the server */ } };
   const saveSettings = () => { LS.set('omr_device', DEV); saveWsCache(); };
   const saveKeys = saveWsCache, saveResults = saveWsCache;
   const saveTpls = () => LS.set('omr_templates', customTpls);
@@ -481,6 +483,17 @@
     sel.value = ks.some(k => k.id === cur) ? cur : '';
   }
   $('#resKey').onchange = () => renderResults();
+  $('#resDelAll').onclick = () => {
+    const kid = $('#resKey').value, list = results.filter(r => !kid || r.keyId === kid);
+    if (!list.length) { toast('No results to delete.'); return; }
+    const what = kid ? 'all ' + list.length + ' result(s) of “' + (list[0].keyName || 'this answer key') + '”' : 'ALL ' + list.length + ' result(s) of every answer key';
+    if (!confirm('Delete ' + what + '?' + (wsId.indexOf('g:') === 0 ? '\nThey will be deleted for the whole group.' : '') + '\n\nThis cannot be undone.')) return;
+    const ids = {}; list.forEach(r => { ids[r.id] = 1; });
+    results = results.filter(r => !ids[r.id]); saveResults(); renderResults();
+    outbox = outbox.filter(o => !(o.key && /^res:/.test(o.key) && ids[o.key.slice(4)]));
+    queue('deleteResults', { wid: wsId, keyId: kid || '' }, 'resall:' + (kid || '*'));
+    toast('Results deleted.');
+  };
   function renderResults() {
     fillResKey();
     const L = $('#resList');
@@ -804,7 +817,7 @@
   function loadWs(wid) {
     wsId = wid; LS.set('omr_ws_' + A.user.id, wid); lastSig = '';
     const c = LS.get(wsKey(wid), null) || {};
-    keys = c.keys || {}; results = c.results || []; papers = c.papers || {}; WSS = normWss(c.settings); WLOGO = c.logo || ''; logoDraft = null; applyS();
+    keys = c.keys || {}; results = c.results || []; papers = c.papers || {}; paperImages = LS.get('omr_pi_' + wsId, {}) || {}; WSS = normWss(c.settings); WLOGO = c.logo || ''; logoDraft = null; applyS();
     keyState = { id: '', tplId: 'builtin', answers: {} }; sc = { sel: null }; submitted = false;
     $('#keyName').value = ''; $('#scanArea').hidden = true; $('#resBox').hidden = true;
     fillSelects(); renderKey(); updateTimerBtn(); fillWsForm(); renderResults();
@@ -821,10 +834,11 @@
     if (wid !== wsId || outbox.length) return;
     const nk = {}; r.keys.forEach(k => { nk[k.id] = k; });
     const np = {}; (r.papers || []).forEach(p => { np[p.id] = p; });
-    const nset = normWss(r.settings), sig = JSON.stringify([nk, r.results, nset, r.logo, np]);
+    const ni = {}; (r.images || []).forEach(m => { ni[m.id] = m.data; });
+    const nset = normWss(r.settings), sig = JSON.stringify([nk, r.results, nset, r.logo, np, Object.keys(ni).sort()]);
     if (sig === lastSig) { if (loud) toast('Up to date.'); return; }
     const setChanged = JSON.stringify(nset) !== JSON.stringify(WSS) || r.logo !== WLOGO;
-    lastSig = sig; keys = nk; papers = np; results = r.results; WSS = nset; WLOGO = r.logo || ''; applyS(); saveWsCache();
+    lastSig = sig; keys = nk; papers = np; paperImages = ni; results = r.results; WSS = nset; WLOGO = r.logo || ''; applyS(); saveWsCache();
     if (keyState.id && !keys[keyState.id]) { keyState = { id: '', tplId: 'builtin', answers: {} }; $('#keyName').value = ''; }
     fillSelects(); renderKey(); updateTimerBtn(); if (setChanged && !logoDraft && !$('#v-set').classList.contains('on')) fillWsForm();
     if ($('#v-res').classList.contains('on')) renderResults();
@@ -1047,8 +1061,13 @@
     const r = await api('overview', {}); if (!r.ok) { $('#admGroups').innerHTML = '<p class="msg">' + esc(trErr(r.error)) + '</p>'; return; }
     const lab = {}; r.groups.forEach(g => { lab['g:' + g.gid] = groupLabel(g); });
     $('#admGroups').innerHTML = r.groups.length ? r.groups.map(g => `<div class="item"><div><b>${esc(groupLabel(g))}</b><small>${g.members.map(m => esc(m.name)).join(', ')}<br>${g.keys} answer key(s) • ${g.results} result(s)${g.last ? ' • last activity ' + esc(new Date(g.last).toLocaleString()) : ''}</small></div>
-      <button class="b sm" data-open="${esc(g.gid)}">Open</button></div>`).join('') : '<p class="hint">No groups yet.</p>';
+      <div><button class="b sm" data-open="${esc(g.gid)}">Open</button><br><button class="b red sm" data-delg="${esc(g.gid)}" data-gn="${esc(groupLabel(g))}" style="margin-top:6px">Delete</button></div></div>`).join('') : '<p class="hint">No groups yet.</p>';
     $('#admGroups').querySelectorAll('[data-open]').forEach(b => b.onclick = async () => { await flush(); loadWs('g:' + b.dataset.open); fillWsSel(); pullWs(true); gotoTab('res'); });
+    $('#admGroups').querySelectorAll('[data-delg]').forEach(b => b.onclick = async () => {
+      if (!confirm('Delete the group “' + b.dataset.gn + '”?\n\nIts members are removed from it and ALL its answer keys, results and question papers are deleted for everybody. People\'s personal workspaces are not touched.\n\nThis cannot be undone.')) return;
+      const gid = b.dataset.delg, rr = await api('deleteGroup', { gid });
+      if (rr && rr.ok) { if (wsId === 'g:' + gid) loadWs(personalWid()); await pullDir(); fillWsSel(); renderGroups(); loadAdmin(); toast('Group deleted.'); } else toast(trErr(rr && rr.error));
+    });
     $('#admAct').innerHTML = r.activity.length ? r.activity.map(x => `<div class="act">${esc(new Date(x.t).toLocaleString())} • <b>${esc(x.name)}</b> ${esc(x.action)}${x.detail ? ' — ' + esc(x.detail) : ''}<br><span class="hint">${esc(lab[x.wid] || (x.wid ? 'personal workspace' : 'account'))}</span></div>`).join('') : '<p class="hint">Nothing yet.</p>';
   }
   $('#admRef').onclick = loadAdmin;
@@ -1071,7 +1090,8 @@
   window.OMRApp = {
     tpls: allTpls, getTpl, papers: () => papers, isGroup: () => wsId.indexOf('g:') === 0, me: () => (A && A.user) || null,
     canUp, gotoTab, resizeLogo, needReport, download, wsLogo: () => WLOGO, wsHead: () => WSS.header,
-    savePaper(p) { papers[p.id] = p; saveWsCache(); return queue('savePaper', { wid: wsId, paper: p }, 'paper:' + p.id); },
+    images: () => paperImages,
+    savePaper(p, imgs) { papers[p.id] = p; (imgs || []).forEach(m => { paperImages[m.id] = m.data; }); saveWsCache(); return queue('savePaper', { wid: wsId, paper: p, images: imgs || [] }, 'paper:' + p.id); },
     deletePaper(id) { delete papers[id]; saveWsCache(); queue('deletePaper', { wid: wsId, id }, 'paper:' + id); },
     saveKey(k) { keys[k.id] = k; saveKeys(); fillSelects(); renderKey(); return queue('saveKey', { wid: wsId, key: k }, 'key:' + k.id); }
   };
