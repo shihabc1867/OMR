@@ -15,7 +15,7 @@ body{margin:0;font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;b
 header{background:#0f766e;color:#fff;padding:12px 14px;display:flex;justify-content:space-between;align-items:center}
 header h1{font-size:18px;margin:0}
 nav{display:flex;background:#fff;border-bottom:1px solid #e2e8f0;position:sticky;top:0;z-index:5;overflow-x:auto}
-nav button{flex:1;min-width:64px;padding:12px 6px;border:0;background:none;font:inherit;font-size:14px;border-bottom:3px solid transparent;color:#334155;white-space:nowrap}
+nav button{flex:1 0 auto;min-width:64px;padding:12px 14px;border:0;background:none;font:inherit;font-size:14px;border-bottom:3px solid transparent;color:#334155;white-space:nowrap}
 nav button.on{color:#0f766e;border-color:#0f766e;font-weight:700}
 main{padding:12px;max-width:820px;margin:auto}
 section{display:none}section.on{display:block}
@@ -40,6 +40,15 @@ canvas{display:block;width:100%;height:auto}
 .item{display:flex;justify-content:space-between;align-items:center;padding:9px 0;border-bottom:1px solid #e2e8f0;gap:8px}
 .item small{color:#64748b;display:block}
 .two{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.hs{display:flex;gap:6px;align-items:center;margin:3px 0 8px;flex-wrap:wrap;font-size:13px}
+.hs .sb{min-width:34px;padding:5px 8px;border:1px solid #94a3b8;background:#fff;border-radius:6px;font:inherit;color:#334155}
+.hs .sb.on{background:#0f766e;color:#fff;border-color:#0f766e}
+.hs input[type=number]{width:62px;padding:5px}.hs select{flex:1;min-width:90px;padding:5px}
+.qtb{position:sticky;top:46px;z-index:4;display:flex;gap:4px;overflow-x:auto;background:#fff;padding:6px 0;border-bottom:1px solid #e2e8f0;margin:6px 0}
+.qtb button{min-width:34px;padding:6px 8px;border:1px solid #cbd5e1;background:#f8fafc;border-radius:6px;font:inherit;font-size:15px;color:#0f172a}
+.qtb .sep{width:1px;background:#cbd5e1;margin:0 3px}
+.qpv{width:100%;height:auto;border:1px dashed #94a3b8;border-radius:6px;margin-top:6px;background:#fff}
+.qimg{display:flex;gap:8px;align-items:center;margin:4px 0;flex-wrap:wrap}.qimg img{max-height:70px;max-width:110px;border:1px solid #cbd5e1;border-radius:4px}
 .qi{border:1px solid #cbd5e1;border-radius:10px;padding:8px;margin:8px 0;background:#f8fafc}
 .qh{display:flex;justify-content:space-between;align-items:center;gap:6px;margin:2px 0}
 .qh b{background:#0f766e;color:#fff;border-radius:6px;padding:1px 8px}
@@ -144,11 +153,11 @@ header select{width:auto;max-width:46vw;padding:6px;font-size:13px}
   </div>
   <div class="card">
     <b>Heading of the paper</b>
-    <input id="qpH_l1" placeholder="Line 1 – institute / coaching name">
-    <input id="qpH_l2" placeholder="Line 2 – exam name">
-    <input id="qpH_l3" placeholder="Line 3 – subject / class">
-    <input id="qpH_l4" placeholder="Line 4 – title (underlined), e.g. Question Paper">
-    <input id="qpH_info" placeholder="Info line, e.g. Time: 30 minutes    Full marks: 50">
+    <input id="qpH_l1" placeholder="Line 1 – institute / coaching name"><div class="hs" id="qpHS_l1"></div>
+    <input id="qpH_l2" placeholder="Line 2 – exam name"><div class="hs" id="qpHS_l2"></div>
+    <input id="qpH_l3" placeholder="Line 3 – subject / class"><div class="hs" id="qpHS_l3"></div>
+    <input id="qpH_l4" placeholder="Line 4 – title, e.g. Question Paper"><div class="hs" id="qpHS_l4"></div>
+    <input id="qpH_info" placeholder="Info line, e.g. Time: 30 minutes    Full marks: 50"><div class="hs" id="qpHS_info"></div>
     <img id="qpLogoPrev" class="logoPrev" alt="logo" hidden>
     <div class="sm2" style="margin-top:6px">
       <button class="b alt sm" id="qpLogoBtn">🖼 Add logo</button>
@@ -163,16 +172,32 @@ header select{width:auto;max-width:46vw;padding:6px;font-size:13px}
       <div><label>Option labels</label><select id="qpLs"><option value="abcd">(a) (b) (c) (d)</option><option value="ABCD">(A) (B) (C) (D)</option><option value="bn">(ক) (খ) (গ) (ঘ)</option><option value="bnum">(১) (২) (৩) (৪)</option></select></div>
       <div><label>Number of questions (1–100)</label><input id="qpCount" type="number" min="0" max="100" inputmode="numeric"></div>
     </div>
+    <label>Text size of the questions (pt)</label>
+    <div class="sm2"><button class="b alt sm" id="qpFsM">A−</button><input id="qpFs" type="number" min="6" max="30" step="0.5" inputmode="decimal" style="width:80px"><button class="b alt sm" id="qpFsP">A＋</button></div>
+    <label style="display:flex;gap:6px;align-items:center;margin-top:6px"><input type="checkbox" id="qpFit" style="width:auto"> Shrink the text if needed to fit 1 page (up to 60 questions) or 2 pages (more)</label>
+    <details style="margin:8px 0">
+      <summary>🔤 Fonts</summary>
+      <div class="two"><div><label>English font</label><select id="qpFEn"></select></div><div><label>Bangla font</label><select id="qpFBn"></select></div></div>
+      <button class="b alt sm" id="qpFontBtn">＋ Add a font file (.ttf)</button>
+      <input type="file" id="qpFontIn" accept=".ttf,.otf,.woff,.woff2" hidden>
+      <div class="hint">English text uses Times New Roman and Bangla text uses SutonnyOMJ. A font must be installed on the phone to be used. If SutonnyOMJ is not installed, add its .ttf file here once and it is kept on this phone.</div>
+    </details>
     <details style="margin:8px 0">
       <summary>📋 Paste all questions at once</summary>
       <textarea id="qpPaste" rows="8" placeholder="1. Question text&#10;(a) option  (b) option  (c) option  (d) option&#10;2. Next question…&#10;a) …&#10;b) …"></textarea>
-      <label style="display:flex;gap:6px;align-items:center"><input type="checkbox" id="qpRep"> Replace the questions already in the list</label>
+      <label style="display:flex;gap:6px;align-items:center"><input type="checkbox" id="qpRep" style="width:auto"> Replace the questions already in the list</label>
       <button class="b" id="qpPasteBtn">Add pasted questions</button>
-      <div class="hint">Start each question with a number (1. / ১। / Q1.). Start options with a letter: (a) a) A. ক) — several options can be on one line. Add “Ans: b” or put * after the right option to mark answers automatically.</div>
+      <div class="hint">Start each question with a number (1. / ১। / Q1.). The questions are put in the order of their numbers. Start options with a letter: (a) a) A. ক) — several options can be on one line. Add “Ans: b” or put * after the right option to mark answers automatically.</div>
     </details>
+    <details style="margin:8px 0">
+      <summary>∑ Maths, bold, italic, underline</summary>
+      <div class="hint">Select some text in a question and tap <b>B</b> <i>I</i> <u>U</u>, or type &lt;b&gt;bold&lt;/b&gt; &lt;i&gt;italic&lt;/i&gt; &lt;u&gt;underline&lt;/u&gt;.<br>Maths goes between dollar signs: <code>$x^{2}$</code> power, <code>$H_{2}O$</code> subscript, <code>$\frac{a}{b}$</code> fraction, <code>$\sqrt{x}$</code> root, <code>$\alpha$ $\pi$ $\theta$ $\times$ $\leq$ $\pm$</code> symbols. A small picture of the result appears under the question.<br>For a picture tap “🖼 Picture” under a question.</div>
+    </details>
+    <div id="qpTb" class="qtb"></div>
     <div id="qpList"></div>
     <button class="b alt" id="qpAdd">＋ Add question</button>
     <p class="hint">Tap the letter button of an option to mark it as the correct answer (green). Tap again to unmark.</p>
+    <input type="file" id="qpImgIn" accept="image/*" hidden>
   </div>
   <div class="card">
     <b>OMR sheet for the answer key</b>
@@ -249,6 +274,7 @@ header select{width:auto;max-width:46vw;padding:6px;font-size:13px}
     <button class="b alt" id="pdfEach">⬇ All students — one page each (PDF)</button>
     <button class="b alt" id="resCsv">⬇ CSV</button>
     <button class="b alt" id="resSync">🔄 Refresh</button>
+    <button class="b red" id="resDelAll">🗑 Delete all results shown</button>
     <div id="pdfMsg" class="msg"></div>
     <p class="hint">Ranked by marks, highest first. Top 3 in green, students below the pass mark in red. The PDF file is downloaded to your phone. Heading and logo: Settings tab.</p>
     <div id="resList"></div>
