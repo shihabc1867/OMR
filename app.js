@@ -958,14 +958,16 @@
       <div><button class="b sm" data-acc="${esc(q.rid)}">Accept</button> <button class="b red sm" data-dec="${esc(q.rid)}">Decline</button></div></div>`).join('') : '<p class="hint">No invitations.</p>';
     $('#invIn').querySelectorAll('[data-acc]').forEach(b => b.onclick = async () => { await act('respond', { rid: b.dataset.acc, accept: true }); renderGroups(); });
     $('#invIn').querySelectorAll('[data-dec]').forEach(b => b.onclick = async () => { await act('respond', { rid: b.dataset.dec, accept: false }); renderGroups(); });
-    const gs = myGroups(), L = $('#grpList');
+    const gs = isAdmin() ? dir.groups.slice() : myGroups(), L = $('#grpList');
+    const canDel = g => isAdmin() || g.members.some(m => m.id === A.user.id && m.role === 'owner');
     L.innerHTML = gs.length ? gs.map(g => `<div class="card"><b>${esc(groupLabel(g))}</b>${'g:' + g.gid === wsId ? '<span class="chip g">open now</span>' : ''}
       <div class="hint">Members</div>${g.members.map(m => `<div class="act">${esc(m.name)} • ${esc(m.id)}${m.role === 'owner' ? ' ★' : ''}</div>`).join('')}
       ${dir.requests.filter(q => q.gid === g.gid).map(q => `<div class="act">⏳ Waiting: ${esc(q.toName)} (${esc(q.to)}), invited by ${esc(q.fromName)}</div>`).join('')}
       <div class="sm2" style="margin-top:8px"><input list="dlUsers" placeholder="ID (mobile) of the user to invite" data-inv="${esc(g.gid)}"><button class="b sm" data-send="${esc(g.gid)}">Send request</button></div>
       <button class="b alt sm" data-use="${esc(g.gid)}" style="margin-top:8px">Open this group</button>
       <button class="b alt sm" data-ren="${esc(g.gid)}" style="margin-top:8px">Rename</button>
-      <button class="b red sm" data-leave="${esc(g.gid)}" style="margin-top:8px">Leave</button><div class="msg" data-gm="${esc(g.gid)}"></div></div>`).join('')
+      ${isMemberOf(g) ? `<button class="b alt sm" data-leave="${esc(g.gid)}" style="margin-top:8px">Leave</button>` : ''}
+      ${canDel(g) ? `<button class="b red sm" data-delgrp="${esc(g.gid)}" data-gn="${esc(groupLabel(g))}" style="margin-top:8px">🗑 Delete group</button>` : ''}<div class="msg" data-gm="${esc(g.gid)}"></div></div>`).join('')
       : '<div class="card"><p class="hint">You are not in any group yet. Create one above, or accept an invitation.</p></div>';
     L.querySelectorAll('[data-send]').forEach(b => b.onclick = async () => {
       const gid = b.dataset.send, inp = L.querySelector('[data-inv="' + gid + '"]'), msg = L.querySelector('[data-gm="' + gid + '"]');
@@ -977,6 +979,13 @@
     L.querySelectorAll('[data-ren]').forEach(b => b.onclick = async () => {
       const g = gs.find(x => x.gid === b.dataset.ren), n = prompt('Group name', g.name); if (n === null) return;
       await act('renameGroup', { gid: g.gid, name: n }); renderGroups();
+    });
+    L.querySelectorAll('[data-delgrp]').forEach(b => b.onclick = async () => {
+      if (!confirm('Delete the group “' + b.dataset.gn + '”?\n\nAll its members are removed and ALL its answer keys, results and question papers are deleted for everybody. Personal workspaces are not touched.\n\nThis cannot be undone.')) return;
+      const gid = b.dataset.delgrp; await flush();
+      const r = await api('deleteGroup', { gid });
+      if (r && r.ok) { if (wsId === 'g:' + gid) loadWs(personalWid()); await pullDir(); fillWsSel(); renderGroups(); toast('Group deleted.'); }
+      else toast(trErr(r && r.error) || 'Could not delete the group.');
     });
     L.querySelectorAll('[data-leave]').forEach(b => b.onclick = async () => {
       if (!confirm('Leave this group? You will no longer see its answer keys and results.')) return;
