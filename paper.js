@@ -236,14 +236,14 @@
   }
 
   // ---------- A4 page drawing (canvas, 150 dpi) ----------
-  const PW = 1240, PH = 1754, M = 64, GUT = 40, MINPT = 6.5;
+  const PW = 1240, PH = 1754, M = 64, GUT = 40, MINPT = 6.5, SC = 2;   // SC: 2 -> 300 dpi pixels (sharp PDF when zoomed)
   const DEF_HS = { l1: { b: 1, i: 0, u: 0, sz: 21, f: '' }, l2: { b: 1, i: 0, u: 0, sz: 17, f: '' }, l3: { b: 1, i: 0, u: 0, sz: 17, f: '' }, l4: { b: 1, i: 0, u: 1, sz: 17, f: '' }, info: { b: 0, i: 0, u: 0, sz: 13, f: '' } };
   const HCOL = { l1: '#000', l2: '#000', l3: '#d6339a', l4: '#2f4aa0', info: '#000' };
   const hstyle = (hs, k) => Object.assign({}, DEF_HS[k], (hs || {})[k] || {});
 
   function newPage() {
-    const c = document.createElement('canvas'); c.width = PW; c.height = PH;
-    const x = c.getContext('2d'); x.fillStyle = '#fff'; x.fillRect(0, 0, PW, PH); x.textBaseline = 'alphabetic'; x.textAlign = 'left';
+    const c = document.createElement('canvas'); c.width = PW * SC; c.height = PH * SC;
+    const x = c.getContext('2d'); x.scale(SC, SC); x.imageSmoothingQuality = 'high'; x.fillStyle = '#fff'; x.fillRect(0, 0, PW, PH); x.textBaseline = 'alphabetic'; x.textAlign = 'left';
     return { c, x };
   }
   // logo on the left, the heading lines centred on the page, then a rule. Returns the y below the heading.
