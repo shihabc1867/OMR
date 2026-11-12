@@ -202,14 +202,37 @@
       }
     return best;
   }
-  function findMarkers(gray, w, h, aspect) {
+  // Contrast stretch (0.3% darkest .. 99% brightest -> 0..255): rescues dim, washed-out or low-contrast photos
+  function stretch(g) {
+    const hs = new Uint32Array(256), n = g.length;
+    for (let i = 0; i < n; i++) hs[g[i]]++;
+    let lo = 0, a = 0; while (lo < 254 && (a += hs[lo]) < n * 0.003) lo++;
+    let hi = 255; a = 0; while (hi > 1 && (a += hs[hi]) < n * 0.01) hi--;
+    if (hi - lo < 25) return g;
+    const k = 255 / (hi - lo), out = new Uint8Array(n);
+    for (let i = 0; i < n; i++) { const v = (g[i] - lo) * k; out[i] = v < 0 ? 0 : v > 255 ? 255 : v; }
+    return out;
+  }
+  // quick = true (live camera, every frame): few attempts so the preview stays smooth.
+  // quick = false: many thresholds, contrast-stretched image, and finally a relaxed shape check.
+  function findMarkers(gray, w, h, aspect, quick) {
     const big = Math.max(w, h);
-    // Several thresholds / window sizes: the first one that gives four consistent squares wins
-    const tries = [[big / 16, 0.55], [big / 16, 0.7], [big / 10, 0.45], [big / 24, 0.8], [big / 8, 0.35]];
-    for (const t of tries) {
-      const q = pickQuad(markerCands(gray, w, h, Math.max(15, Math.round(t[0])), t[1]), w, h, aspect);
-      if (q) return q;
-    }
+    const tries = [[big / 16, 0.55], [big / 16, 0.7], [big / 10, 0.45], [big / 24, 0.8], [big / 8, 0.35], [big / 12, 0.62], [big / 20, 0.72], [big / 6, 0.3]];
+    const run = (g, asp, list) => {
+      for (const t of list) {
+        const q = pickQuad(markerCands(g, w, h, Math.max(15, Math.round(t[0])), t[1]), w, h, asp);
+        if (q) return q;
+      }
+      return null;
+    };
+    let q = run(gray, aspect, quick ? tries.slice(0, 3) : tries.slice(0, 5));
+    if (q) return q;
+    const st = stretch(gray);
+    if (st !== gray) { q = run(st, aspect, quick ? [tries[0], tries[2]] : tries); if (q) return q; }
+    if (quick) return null;
+    q = run(gray, aspect, tries.slice(5)); if (q) return q;
+    // last resort: no aspect-ratio condition (odd perspective / the template's ratio is unknown)
+    if (aspect) { q = run(st, 0, tries.slice(0, 5)); if (q) return q; }
     return null;
   }
 
