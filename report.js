@@ -1,7 +1,8 @@
 /* report.js - result sheets drawn on canvas and saved as a real PDF file (no libraries, works offline). */
 (function (root) {
   'use strict';
-  const PW = 1240, PH = 1754, M = 70;              // A4 at 150 dpi
+  const PW = 1240, PH = 1754, M = 70;              // A4 layout units (150 dpi grid)
+  const SC = 2;                                    // render scale: 2 -> 300 dpi pixels, sharp when zoomed
   const GREEN = '#5b8f2a', RED = '#e11d1d', BLACK = '#000';
   const FF = '"Times New Roman","Noto Serif Bengali","Noto Sans Bengali","Nirmala UI","Kohinoor Bangla","Liberation Serif",serif';
   const font = (sz, b) => (b ? 'bold ' : '') + sz + 'px ' + FF;
@@ -9,8 +10,8 @@
   const pad2 = n => String(n).padStart(2, '0');
 
   function newPage() {
-    const c = document.createElement('canvas'); c.width = PW; c.height = PH;
-    const x = c.getContext('2d'); x.fillStyle = '#fff'; x.fillRect(0, 0, PW, PH); x.textBaseline = 'middle'; x.textAlign = 'center';
+    const c = document.createElement('canvas'); c.width = PW * SC; c.height = PH * SC;
+    const x = c.getContext('2d'); x.scale(SC, SC); x.imageSmoothingQuality = 'high'; x.fillStyle = '#fff'; x.fillRect(0, 0, PW, PH); x.textBaseline = 'middle'; x.textAlign = 'center';
     return { c, x };
   }
   function fit(x, text, maxW, size, bold, min) {
@@ -122,7 +123,7 @@
   // ---------- PDF writer: every canvas becomes one A4 page (JPEG image) ----------
   function Doc() { this.imgs = []; }
   Doc.prototype.add = function (canvas) {
-    const b64 = canvas.toDataURL('image/jpeg', 0.9).split(',')[1], bin = atob(b64), u = new Uint8Array(bin.length);
+    const b64 = canvas.toDataURL('image/jpeg', 0.95).split(',')[1], bin = atob(b64), u = new Uint8Array(bin.length);
     for (let i = 0; i < bin.length; i++) u[i] = bin.charCodeAt(i);
     this.imgs.push({ u, w: canvas.width, h: canvas.height }); canvas.width = 0; canvas.height = 0;
   };
