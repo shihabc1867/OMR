@@ -353,7 +353,7 @@ header select{width:auto;max-width:46vw;padding:6px;font-size:13px}
   </div>
   <div class="card">
     <b>This phone</b>
-    <label>Mark detection threshold (0.05–0.5; lower detects fainter marks)</label><input id="sThr" type="number" step="0.01">
+    <label>Mark strictness (0.25–0.6; higher = only thick, solid pen ink counts)</label><input id="sThr" type="number" step="0.01">
     <label>Minimum fill % for a valid answer (30–95; a bubble filled less than this counts as partial = wrong)</label><input id="sFill" type="number" step="1">
     <button class="b alt" id="dSave">💾 Save</button>
     <div id="dMsg" class="msg"></div>
@@ -476,6 +476,7 @@ header select{width:auto;max-width:46vw;padding:6px;font-size:13px}
     <div id="lvRDet" class="hint"></div>
     <div class="w" id="lvRWarn"></div>
     <div id="lvBarWrap"><div id="lvBar"></div></div>
+    <button class="b alt" id="lvEdit" hidden>✏️ Edit name / ID</button>
     <button class="b" id="lvNext">▶ Next sheet now</button>
   </div>
 </div>
