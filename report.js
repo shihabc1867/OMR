@@ -51,27 +51,37 @@
     { k: 'rank', w: 110, t: ['Merit', 'List'] }, { k: 'id', w: 150, t: ['ID No.'] }, { k: 'name', w: 470, t: ['Name'] },
     { k: 'pos', w: 125, t: ['Positive'] }, { k: 'neg', w: 125, t: ['Negative'] }, { k: 'total', w: 120, t: ['Total'] }
   ];
+  // With sections (opts.secHeads = [{name,total}]) one column per section is put between Name and Positive; the Name column gets narrower.
+  function colsFor(secHeads) {
+    const k = secHeads ? secHeads.length : 0; if (!k) return COLS;
+    const room = 570, sw = Math.min(125, Math.floor((room - 190) / k)), nameW = room - k * sw;
+    const out = [{ k: 'rank', w: 90, t: ['Merit', 'List'] }, { k: 'id', w: 130, t: ['ID No.'] }, { k: 'name', w: nameW, t: ['Name'] }];
+    secHeads.forEach((h, i) => out.push({ k: 's' + i, si: i, w: sw, t: [String(h.name), '(' + fmt(h.total) + ')'] }));
+    out.push({ k: 'pos', w: 105, t: ['Positive'] }, { k: 'neg', w: 105, t: ['Negative'] }, { k: 'total', w: 100, t: ['Total'] });
+    return out;
+  }
   const HEAD_H = 90, ROW_H = 50;
-  const cellsOf = r => ({ rank: pad2(r.rank), id: r.id || '', name: r.name || '', pos: pad2(r.pos), neg: pad2(r.neg), total: fmt(r.total) });
+  const cellsOf = r => { const o = { rank: pad2(r.rank), id: r.id || '', name: r.name || '', pos: pad2(r.pos), neg: pad2(r.neg), total: fmt(r.total) }; (r.secs || []).forEach((t, i) => { o['s' + i] = fmt(t.fin); }); return o; };
 
-  function tableHead(x, y) {
+  function tableHead(x, y, cols) {
     x.lineWidth = 2; x.strokeStyle = '#000'; x.fillStyle = '#000'; let cx = M;
-    COLS.forEach(c => {
+    cols.forEach(c => {
       x.strokeRect(cx, y, c.w, HEAD_H); x.textAlign = 'center';
-      const s = Math.min(30, fit(x, c.t[0], c.w - 12, 30, true, 18));
+      const s = Math.min(30, fit(x, c.t[0], c.w - 12, 30, true, c.si != null ? 11 : 18));
       x.font = font(s, true);
-      if (c.t.length === 2) { x.fillText(c.t[0], cx + c.w / 2, y + HEAD_H / 2 - 17); x.fillText(c.t[1], cx + c.w / 2, y + HEAD_H / 2 + 17); }
+      if (c.t.length === 2) { x.fillText(c.t[0], cx + c.w / 2, y + HEAD_H / 2 - 17); const s2 = fit(x, c.t[1], c.w - 12, 26, false, 11); x.font = font(s2, false); x.fillText(c.t[1], cx + c.w / 2, y + HEAD_H / 2 + 17); }
       else x.fillText(c.t[0], cx + c.w / 2, y + HEAD_H / 2);
       cx += c.w;
     });
     return y + HEAD_H;
   }
-  function tableRow(x, y, row) {
+  function tableRow(x, y, row, cols) {
     const v = cellsOf(row); let cx = M; x.lineWidth = 2; x.strokeStyle = '#000';
-    COLS.forEach(c => {
-      x.strokeRect(cx, y, c.w, ROW_H); x.fillStyle = row.color || BLACK; x.textAlign = 'center';
-      fit(x, String(v[c.k]), c.w - 14, 30, false, 16);
-      x.fillText(String(v[c.k]), cx + c.w / 2, y + ROW_H / 2 + 2);
+    cols.forEach(c => {
+      const sec = c.si != null && row.secs && row.secs[c.si], txt = c.si != null && !sec ? '–' : String(v[c.k]);
+      x.strokeRect(cx, y, c.w, ROW_H); x.fillStyle = sec && sec.fail ? RED : (row.color || BLACK); x.textAlign = 'center';    // a failed section is red even in a passing row
+      fit(x, txt, c.w - 14, 30, false, 12);
+      x.fillText(txt, cx + c.w / 2, y + ROW_H / 2 + 2);
       cx += c.w;
     });
     return y + ROW_H;
@@ -83,24 +93,24 @@
 
   // opts: { header, logo, caption, rows:[{rank,id,name,pos,neg,total,color}] }  -> adds canvases through sink(canvas)
   function merit(opts, sink) {
-    const pages = []; let p = newPage(); pages.push(p);
+    const pages = [], cols = colsFor(opts.secHeads); let p = newPage(); pages.push(p);
     let y = header(p.x, opts.header, opts.logo, opts.caption) + 10;
-    y = tableHead(p.x, y);
+    y = tableHead(p.x, y, cols);
     opts.rows.forEach(r => {
-      if (y + ROW_H > PH - M - 30) { p = newPage(); pages.push(p); y = tableHead(p.x, M); }
-      y = tableRow(p.x, y, r);
+      if (y + ROW_H > PH - M - 30) { p = newPage(); pages.push(p); y = tableHead(p.x, M, cols); }
+      y = tableRow(p.x, y, r, cols);
     });
     pageNo(pages); pages.forEach(q => sink(q.c));
   }
 
   // opts: { header, logo, caption, row, lines:[{t,color}], answers:[{q,mine,good,wrong,multi,answered}] }
   function student(opts, sink) {
-    const pages = []; let p = newPage(); pages.push(p);
+    const pages = [], cols = colsFor(opts.secHeads); let p = newPage(); pages.push(p);
     let x = p.x;
     let y = header(x, opts.header, opts.logo, opts.caption) + 10;
-    y = tableHead(x, y); y = tableRow(x, y, opts.row) + 36;
+    y = tableHead(x, y, cols); y = tableRow(x, y, opts.row, cols) + 36;
     x.textAlign = 'left';
-    (opts.lines || []).forEach(l => { x.font = font(30, !!l.bold); x.fillStyle = l.color || BLACK; x.fillText(l.t, M, y); y += 44; });
+    (opts.lines || []).forEach(l => { fit(x, l.t, PW - 2 * M, 30, !!l.bold, 16); x.fillStyle = l.color || BLACK; x.fillText(l.t, M, y); y += 44; });
     if (opts.answers && opts.answers.length) {
       y += 14; x.font = font(32, true); x.fillStyle = BLACK; x.fillText('Answer details', M, y); y += 48;
       const A = opts.answers, cols = 5, cw = (PW - 2 * M) / cols, rh = 34;
@@ -109,7 +119,7 @@
         const per = Math.max(1, Math.floor((PH - M - 60 - y) / rh)), chunk = A.slice(i, i + per * cols), n = Math.ceil(chunk.length / cols);
         chunk.forEach((a, j) => {
           const col = Math.floor(j / n), row = j % n, tx = M + col * cw, ty = y + row * rh;
-          const wr = a.wrong; x.textAlign = 'left'; x.font = font(24, false); x.fillStyle = wr ? RED : BLACK;
+          const wr = a.wrong; x.textAlign = 'left'; x.font = font(24, false); x.fillStyle = (wr || a.red) ? RED : BLACK;
           x.fillText(a.q + '. ' + a.mine + (a.multi ? '*' : '') + (wr ? '  ✗ (' + a.good + ')' : a.answered ? '  ✓' : ''), tx, ty);
         });
         i += chunk.length; y += n * rh + 16;
