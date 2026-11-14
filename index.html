@@ -105,6 +105,13 @@ header select{width:auto;max-width:46vw;padding:6px;font-size:13px}
 .logoPrev{max-width:90px;max-height:90px;border:1px solid #cbd5e1;border-radius:8px;display:block;margin:6px 0}
 .act{font-size:12px;border-bottom:1px solid #e2e8f0;padding:5px 0;color:#334155}
 .act b{color:#0f766e}
+.secbox{border:1px solid #cbd5e1;border-radius:10px;padding:8px;margin:10px 0;background:#f8fafc}
+.secrow{display:grid;grid-template-columns:1fr 62px 62px auto;gap:6px;margin:6px 0;align-items:center}
+.secrow input{padding:8px}
+.secres .sr{border:1px solid #bbf7d0;background:#f0fdf4;border-radius:8px;padding:6px 10px;margin:6px 0;font-size:13px}
+.secres .sr.bad{border-color:#fecaca;background:#fef2f2;color:#dc2626}
+.secres .sr.bad b{color:#dc2626}
+.big.bad{color:#dc2626}
 </style>
 </head>
 <body>
@@ -131,6 +138,13 @@ header select{width:auto;max-width:46vw;padding:6px;font-size:13px}
     <input id="keyName" placeholder="e.g. Model Test 1">
     <label>OMR sheet type</label>
     <select id="keyTpl"></select>
+    <div class="secbox">
+      <b>Sections (optional)</b>
+      <div class="hint">Split the questions into sections, e.g. Bangla 1–15 and English 16–50. Every section gets its own result. A student below the section pass mark (Settings, default 40%) fails that section.</div>
+      <div id="secList"></div>
+      <button class="b alt sm" id="secAdd">＋ Add section</button>
+      <div id="secNote" class="hint"></div>
+    </div>
     <p class="hint">Tap the correct option for each question you want to score (any number of questions). Questions left empty are not counted. Use zoom (+) if the bubbles look small.</p>
     <div id="keyCount" class="hint"></div>
     <button class="b" id="keySave">💾 Save</button>
@@ -257,7 +271,9 @@ header select{width:auto;max-width:46vw;padding:6px;font-size:13px}
       <div class="row"><span>Total marks</span><b id="rM"></b></div>
       <div class="row"><span>Wrong-answer penalty</span><b id="rN"></b></div>
       <div class="row"><span>Second Timer penalty</span><b id="rT"></b></div>
+      <div id="rSecs" class="secres"></div>
       <div style="text-align:center;margin:12px 0 4px">Score<div class="big" id="rF"></div></div>
+      <div id="rStat" style="text-align:center;font-weight:700;margin:4px 0"></div>
       <div class="hint" id="rS" style="text-align:center"></div>
       <button class="b" id="nextBtn">➕ Next student</button>
       <button class="b alt" id="stuPdf">⬇ This student's PDF</button>
@@ -339,7 +355,8 @@ header select{width:auto;max-width:46vw;padding:6px;font-size:13px}
     <label>Marks per correct answer</label><input id="sPer" type="number" step="0.01">
     <label>Penalty per wrong answer</label><input id="sNeg" type="number" step="0.01">
     <label>Second Timer penalty (% of total marks)</label><input id="sTim" type="number" step="0.1">
-    <label>Pass mark % (students below this are shown in red)</label><input id="sPass" type="number" step="1">
+    <label>Pass mark % of the total marks (students below this fail and are shown in red)</label><input id="sPass" type="number" step="1">
+    <label>Section pass mark % (below this in a section = fail that section, shown in red)</label><input id="sSecPass" type="number" step="1">
     <label>Result sheet heading — line 1 (e.g. institute name)</label><input id="hL1" placeholder="e.g. AUTHENTIC University &amp; Nursing Admission Coaching">
     <label>Line 2 (e.g. Session)</label><input id="hL2" placeholder="e.g. Session: 2026 - 27">
     <label>Line 3 (exam title — leave empty to use the answer key name)</label><input id="hL3" placeholder="e.g. Analytical Ability Model Test - 02">
