@@ -117,3 +117,11 @@ The finder removes thin lines (page borders, text) before looking for solid squa
 - "Shrink the text to fit" keeps ≤60 questions on one A4 page and more on two; switch it off to keep the exact size (more pages if needed).
 - Results tab: **Delete all results shown** (the chosen answer key, or every key); single results still have their own Delete.
 - Admin tab: **Delete** a group (removes its members, answer keys, results, papers and pictures). Backend: new sheet `PaperImages`; new actions `deleteResults`, `deleteGroup`.
+
+
+## Stricter ink detection, sharp PDFs, negative totals, edit student info (v9)
+- **Detection (omr-core.js):** a bubble counts as marked only when its centre holds thick, pen-black ink (a pixel at least 60% darker than the local paper and part of a solid blob). Measured on the inner half of the bubble, re-centred on the printed ring, with the printed letters inside the bubbles removed per option column. Light pencil, ghost/erased marks, smudges, shadows, dust specks, thin ticks and printed letters are ignored. Half-filled or two-bubble answers still make the question invalid. "Mark strictness" in Settings (default 0.30) is reset once to the new default.
+- **Pencil:** dark pencil is no longer read. Use a pen (blue/black).
+- **PDF:** result sheets and question papers are drawn at 360 dpi (2976 x 4210 px per page) instead of 150 dpi. Pictures you add to a question keep a sharp original on the phone that made the paper (the shared copy in the group is small).
+- **Negative totals** are shown as they are (for example -1.5) in the list, PDFs and CSV; older results that were saved as 0 are recalculated.
+- **Edit student info:** Results → ✏️ Edit changes name and Roll/ID of a saved result (also in the live-scan result card).
