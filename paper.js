@@ -236,14 +236,16 @@
   }
 
   // ---------- A4 page drawing (canvas, 150 dpi) ----------
-  const PW = 1240, PH = 1754, M = 64, GUT = 40, MINPT = 6.5, SC = 2;   // SC: 2 -> 300 dpi pixels (sharp PDF when zoomed)
+  const PW = 1240, PH = 1754, M = 64, GUT = 40, MINPT = 6.5;
+  let SC = 2.4, useSC = 2.4;                             // pages are drawn SC times bigger than the layout units (2.4 -> 360 dpi): sharp when zoomed; the on-screen preview uses less
   const DEF_HS = { l1: { b: 1, i: 0, u: 0, sz: 21, f: '' }, l2: { b: 1, i: 0, u: 0, sz: 17, f: '' }, l3: { b: 1, i: 0, u: 0, sz: 17, f: '' }, l4: { b: 1, i: 0, u: 1, sz: 17, f: '' }, info: { b: 0, i: 0, u: 0, sz: 13, f: '' } };
   const HCOL = { l1: '#000', l2: '#000', l3: '#d6339a', l4: '#2f4aa0', info: '#000' };
   const hstyle = (hs, k) => Object.assign({}, DEF_HS[k], (hs || {})[k] || {});
 
   function newPage() {
-    const c = document.createElement('canvas'); c.width = PW * SC; c.height = PH * SC;
-    const x = c.getContext('2d'); x.scale(SC, SC); x.imageSmoothingQuality = 'high'; x.fillStyle = '#fff'; x.fillRect(0, 0, PW, PH); x.textBaseline = 'alphabetic'; x.textAlign = 'left';
+    const c = document.createElement('canvas'); let x = null;
+    for (; useSC >= 1; useSC = Math.max(1, useSC - 0.6)) { c.width = Math.round(PW * useSC); c.height = Math.round(PH * useSC); x = c.getContext('2d'); if (x) break; if (useSC <= 1) break; }
+    x.setTransform(useSC, 0, 0, useSC, 0, 0); x.fillStyle = '#fff'; x.fillRect(0, 0, PW, PH); x.textBaseline = 'alphabetic'; x.textAlign = 'left';
     return { c, x };
   }
   // logo on the left, the heading lines centred on the page, then a rule. Returns the y below the heading.
@@ -308,7 +310,8 @@
   }
 
   // paper: { head, hs, F:{en,bn}, fs (pt), fit, ls, qs, name }; logo: <img>|null; imgs: {id: <img>}.   Returns { pages:[canvas], pt, note }
-  function render(paper, logo, imgs) {
+  function render(paper, logo, imgs, scale) {
+    useSC = scale || SC;
     const st = LS_STYLES[paper.ls] || LS_STYLES.abcd, qs = paper.qs || [], F = Object.assign({}, DEF_F, paper.F || {});
     const maxPt = Math.min(30, Math.max(MINPT, Number(paper.fs) || 12)), fit = paper.fit !== false;
     const p1 = newPage(), x = p1.x, pages = [p1], hy = drawHeader(x, Object.assign({}, paper, { F }), logo), colW = (PW - 2 * M - GUT) / 2;
@@ -388,15 +391,24 @@
   function applyFontCss() { const css = stack(cur.F.en, cur.F.bn); $('#qpList').style.fontFamily = css; $('#qpPaste').style.fontFamily = css; }
 
   // ---- images ----
+  // The picture saved in the shared paper is small (it has to fit in a spreadsheet cell). The sharp original stays in this phone's IndexedDB
+  // and is used here for the preview and the PDF, so the pictures in the PDF stay sharp when zoomed.
   const imgEls = {};
-  const dataImg = id => new Promise(res => { const d = cur.images[id]; if (!d) { res(null); return; } if (imgEls[d]) { res(imgEls[d]); return; } const im = new Image(); im.onload = () => { imgEls[d] = im; res(im); }; im.onerror = () => res(null); im.src = d; });
+  const idbI = () => new Promise((res, rej) => { const r = indexedDB.open('omr_imgs', 1); r.onupgradeneeded = () => r.result.createObjectStore('i'); r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error); });
+  const bigPut = async (k, v) => { try { const d = await idbI(); return await new Promise(res => { const t = d.transaction('i', 'readwrite'); t.objectStore('i').put(v, k); t.oncomplete = () => res(true); t.onerror = () => res(false); }); } catch (e) { return false; } };
+  const bigGet = async k => { try { const d = await idbI(); return await new Promise(res => { const q = d.transaction('i').objectStore('i').get(k); q.onsuccess = () => res(q.result || null); q.onerror = () => res(null); }); } catch (e) { return null; } };
+  const loadEl = d => new Promise(res => { if (imgEls[d]) { res(imgEls[d]); return; } const im = new Image(); im.onload = () => { imgEls[d] = im; res(im); }; im.onerror = () => res(null); im.src = d; });
+  const dataImg = async id => { const d = cur.images[id]; if (!d) return null; const big = await bigGet(id); return (big && await loadEl(big)) || await loadEl(d); };
   async function imgMap() { const m = {}; for (const q of cur.qs) if (q.img && !m[q.img]) { const im = await dataImg(q.img); if (im) m[q.img] = im; } return m; }
+  let bigURL = '';
   function shrinkImage(file) {
     return new Promise((res, rej) => {
       const u = URL.createObjectURL(file), im = new Image();
       im.onerror = () => { URL.revokeObjectURL(u); rej(new Error('This file is not a picture.')); };
       im.onload = () => {
         URL.revokeObjectURL(u);
+        const kb = Math.min(1, 1600 / Math.max(im.width, im.height)), cb = document.createElement('canvas'); cb.width = Math.max(1, Math.round(im.width * kb)); cb.height = Math.max(1, Math.round(im.height * kb));
+        const xb = cb.getContext('2d'); xb.fillStyle = '#fff'; xb.fillRect(0, 0, cb.width, cb.height); xb.drawImage(im, 0, 0, cb.width, cb.height); bigURL = cb.toDataURL('image/jpeg', 0.88);
         for (const side of [760, 620, 500, 400, 320, 240]) for (const q of [0.78, 0.62, 0.48, 0.36]) {
           const k = Math.min(1, side / Math.max(im.width, im.height)), c = document.createElement('canvas'); c.width = Math.max(1, Math.round(im.width * k)); c.height = Math.max(1, Math.round(im.height * k));
           const x = c.getContext('2d'); x.fillStyle = '#fff'; x.fillRect(0, 0, c.width, c.height); x.drawImage(im, 0, 0, c.width, c.height);
@@ -409,7 +421,7 @@
   }
   $('#qpImgIn').onchange = async e => {
     const f = e.target.files[0], i = Number(e.target.dataset.i); e.target.value = ''; if (!f || !cur.qs[i]) return;
-    try { const d = await shrinkImage(f), id = 'm' + Date.now().toString(36) + Math.floor(Math.random() * 1296).toString(36); cur.images[id] = d; cur.qs[i].img = id; cur.qs[i].iw = cur.qs[i].iw || 60; touch(); refreshQ(i); } catch (er) { msg(er.message); }
+    try { const d = await shrinkImage(f), id = 'm' + Date.now().toString(36) + Math.floor(Math.random() * 1296).toString(36); cur.images[id] = d; if (bigURL) await bigPut(id, bigURL); cur.qs[i].img = id; cur.qs[i].iw = cur.qs[i].iw || 60; touch(); refreshQ(i); } catch (er) { msg(er.message); }
   };
 
   // ---- heading ----
@@ -580,20 +592,21 @@
   };
 
   // ---- preview / PDF ----
-  async function build() {
+  async function build(scale) {
     const p = snapshot(); if (!p.qs.length) { msg('Add at least one question first.'); return null; }
     try { await document.fonts.ready; } catch (e) { /* ignore */ }
     const logo = p.logo ? await new Promise(r => { const im = new Image(); im.onload = () => r(im); im.onerror = () => r(null); im.src = p.logo; }) : null;
-    return render(p, logo, await imgMap());
+    return render(p, logo, await imgMap(), scale);
   }
   $('#qpPrevBtn').onclick = async () => {
-    const r = await build(); if (!r) return; const box = $('#qpPrev'); box.innerHTML = '';
+    msg('Preparing preview…', true); await new Promise(r => setTimeout(r, 30));
+    const r = await build(1.4); if (!r) return; const box = $('#qpPrev'); box.innerHTML = '';
     r.pages.forEach(c => { c.style.cssText = 'width:100%;height:auto;border:1px solid #cbd5e1;border-radius:6px;margin-bottom:10px;background:#fff'; box.appendChild(c); });
     msg(r.note || '✔ ' + r.pages.length + ' page(s), text size ' + (Math.floor(r.pt * 10) / 10) + ' pt.', !r.note); box.scrollIntoView({ behavior: 'smooth' });
   };
   $('#qpPdf').onclick = async () => {
     if (!(await App().needReport())) { msg('The PDF file maker (report.js) is not installed on the website yet.'); return; }
-    msg('Creating PDF…', true); const r = await build(); if (!r) return;
+    msg('Creating PDF (sharp, 360 dpi — this can take a few seconds)…', true); await new Promise(r => setTimeout(r, 30)); const r = await build(); if (!r) return;
     const doc = new Report.Doc(); r.pages.forEach(c => doc.add(c));
     App().download(doc.blob(), (cur.name.trim() || 'question-paper').replace(/[\\/:*?"<>|]+/g, '_') + '.pdf');
     msg(r.note || '✔ PDF ready (' + doc.pages() + ' page' + (doc.pages() > 1 ? 's' : '') + ', text ' + (Math.floor(r.pt * 10) / 10) + ' pt).', !r.note);
