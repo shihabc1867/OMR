@@ -12,9 +12,10 @@
   };
 
   // ---------- state ----------
-  const DEF = { per: 1, neg: 0.25, timerPct: 3, thr: 0.18, fillPct: 70, passPct: 40 };
+  const DEF = { per: 1, neg: 0.25, timerPct: 3, thr: 0.3, fillPct: 70, passPct: 40 };
   const oldSet = LS.get('omr_settings', {});                         // settings of the older single-user version
   const DEV = Object.assign({ thr: oldSet.thr || DEF.thr, fillPct: oldSet.fillPct || DEF.fillPct }, LS.get('omr_device', {}));   // this phone only
+  if (!DEV.dv || DEV.dv < 2) { DEV.thr = DEF.thr; DEV.dv = 2; LS.set('omr_device', DEV); }       // v2: the new, stricter ink detection needs its own default strictness
   let WSS = { per: DEF.per, neg: DEF.neg, timerPct: DEF.timerPct, passPct: DEF.passPct, header: { l1: '', l2: '', l3: '', l4: 'Result Sheet' } };   // rules + heading of the open workspace
   let WLOGO = '';
   let S = Object.assign({}, DEF);                                     // merged view used by the scanner/scoring code
@@ -330,7 +331,7 @@
     }
     if (r.learned && !tpl.builtin) { tpl.mk = r.learned; tpl.align = 'markers'; if (saveTpls()) setTimeout(() => smsg('✔ Corner squares learned for this sheet type — scanning now lines up automatically.', true), 50); }
     else learnMarkers(tpl, p, r);
-    sc.rot = r.rot; sc.res = r; sc.lastQuad = r.quad; const A = OMR.analyze(r.dark, r.fill, { thr: S.thr, fillMin: (S.fillPct || 70) / 100 }, r.raw);
+    sc.rot = r.rot; sc.res = r; sc.lastQuad = r.quad; const A = OMR.analyze(r.dark, r.fill, { thr: S.thr, fillMin: (S.fillPct || 70) / 100 }, r.raw, r.core);
     sc.sel = A.sel; sc.bad = new Set(); A.bad.forEach((b, q) => { if (b) sc.bad.add(q); }); sc.manual = new Set();
     sc.img = new ImageData(r.warped, tpl.W, tpl.H);
     submitted = false; $('#resBox').hidden = true; scanCv.width = tpl.W; scanCv.height = tpl.H;
@@ -388,7 +389,7 @@
       else if (!s.length) b++; else if (s.length === 1 && s[0] === key.answers[q]) c++; else { w++; wrongQs.push(q); }
     });
     const total = qs.length * S.per, neg = w * S.neg, tim = tOn ? total * S.timerPct / 100 : 0;
-    return { c, w, b, n: qs.length, total, neg, tim, fin: Math.max(0, c * S.per - neg - tim), wrongQs };
+    return { c, w, b, n: qs.length, total, neg, tim, fin: c * S.per - neg - tim, wrongQs };          // may be negative: shown as it is
   }
   function showResult(r) {
     $('#rC').textContent = r.c; $('#rW').textContent = r.w; $('#rB').textContent = r.b;
@@ -410,7 +411,7 @@
     const m = tpl.mk || tpl.ref, ra = Math.hypot(m[0][0] - m[1][0], m[0][1] - m[1][1]) + Math.hypot(m[3][0] - m[2][0], m[3][1] - m[2][1]),
       rb = Math.hypot(m[1][0] - m[2][0], m[1][1] - m[2][1]) + Math.hypot(m[0][0] - m[3][0], m[0][1] - m[3][1]);
     smsg('', true);
-    const err = await LiveCam.open({ aspect: Math.max(ra, rb) / Math.min(ra, rb), mode: tpl.align === 'page' ? 'page' : 'markers', title: key.name, onShot: liveShot });
+    const err = await LiveCam.open({ aspect: Math.max(ra, rb) / Math.min(ra, rb), mode: tpl.align === 'page' ? 'page' : 'markers', title: key.name, onShot: liveShot, onEdit: id => { const r = editStudent(id); return r ? { name: r.student, id: r.sid } : null; } });
     if (err && err.error) smsg(err.error); else liveMode = true;
   };
   async function liveShot(frame, who) {
@@ -424,7 +425,7 @@
     const r = sc.res, n = sc.sel.filter(s => s.length).length;
     if (!(r.fit >= 0.1) || r.ambiguous || n < 3 || sc.bad.size) { LiveCam.close(); return { review: true }; }   // doubtful: show the review screen (message is already set)
     $('#submitBtn').onclick();
-    const out = { name: stuNow().name, id: stuNow().id, correct: $('#rC').textContent, wrong: $('#rW').textContent, blank: $('#rB').textContent, score: $('#rF').textContent };
+    const out = { rid: sc.rid, name: stuNow().name, id: stuNow().id, correct: $('#rC').textContent, wrong: $('#rW').textContent, blank: $('#rB').textContent, score: $('#rF').textContent };
     const w = $('#scanMsg').textContent; if (w.indexOf('already has a result') > 0) out.warn = w.replace(/^⚠\s*/, '');
     sc = { sel: null }; submitted = false; $('#scanArea').hidden = true; $('#resBox').hidden = true; $('#stuName').value = ''; $('#stuId').value = '';
     smsg('Saved: ' + out.score + ' (' + (out.name || 'Unknown') + '). Live camera is on.', true);
@@ -494,8 +495,19 @@
     queue('deleteResults', { wid: wsId, keyId: kid || '' }, 'resall:' + (kid || '*'));
     toast('Results deleted.');
   };
+  // results saved by older versions were cut at 0: work out the real (negative) total again
+  function fixNeg() { results.forEach(r => { if (!r || r.fin !== 0 || r.c == null) return; const per = r.n ? r.total / r.n : S.per, f = r.c * per - (r.neg || 0) - (r.tim || 0); if (f < -1e-9) r.fin = Math.round(f * 1e4) / 1e4; }); }
+  function editStudent(id) {
+    const r = results.find(x => x.id === id); if (!r) return null;
+    const n = prompt('Student name', r.student && r.student !== 'Unknown' ? r.student : ''); if (n === null) return null;
+    const s = prompt('Roll / ID', r.sid || ''); if (s === null) return null;
+    r.student = n.trim() || 'Unknown'; r.sid = s.trim();
+    saveResults(); queue('saveResult', { wid: wsId, result: r }, 'res:' + r.id); renderResults();
+    if (r.sid && results.some(x => x.keyId === r.keyId && x.sid === r.sid && x.id !== r.id)) toast('⚠ Roll/ID ' + r.sid + ' already has another result for this answer key.');
+    return r;
+  }
   function renderResults() {
-    fillResKey();
+    fixNeg(); fillResKey();
     const L = $('#resList');
     if (!results.length) { L.innerHTML = '<p class="hint">No results yet.</p>'; return; }
     L.innerHTML = selKeyIds().map(kid => {
@@ -503,12 +515,13 @@
       const fails = R.filter(x => isFail(x.r)).length;
       return `<div class="grp">${esc(R[0].r.keyName)} — ${R.length} student(s)${fails ? ', ' + fails + ' below ' + fmt(passPct()) + '%' : ''}</div>` + R.map(({ r, rank }) =>
         `<div class="item${isFail(r) ? ' fail' : ''}"><div><span class="rk">${rank}</span><b>${esc(nameOf(r))}</b>${r.sid ? ' • ID ' + esc(r.sid) : ''}<small>Correct ${r.c} • Wrong ${r.w} • Blank ${r.b}${r.timer ? ' • Timer penalty' : ''} • ${p1(pctOf(r))}%<br>${esc(new Date(r.t).toLocaleString())}${r.by ? ' • by ' + esc(r.by) : ''}${r.wrongQs && r.wrongQs.length ? '<br>Wrong Q: ' + esc(r.wrongQs.join(', ')) : ''}</small></div>
-        <div style="text-align:right"><b class="ok">${fmt(r.fin)}/${fmt(r.total)}</b><br><button class="b alt sm" data-pdf="${esc(r.id)}">PDF</button> <button class="b red sm" data-del="${esc(r.id)}">Delete</button></div></div>`).join('');
+        <div style="text-align:right"><b class="ok">${fmt(r.fin)}/${fmt(r.total)}</b><br><button class="b alt sm" data-edit="${esc(r.id)}">✏️ Edit</button> <button class="b alt sm" data-pdf="${esc(r.id)}">PDF</button> <button class="b red sm" data-del="${esc(r.id)}">Delete</button></div></div>`).join('');
     }).join('');
     L.querySelectorAll('[data-del]').forEach(b => b.onclick = () => {
       if (!confirm('Delete this result?' + (wsId.indexOf('g:') === 0 ? ' It will be deleted for the whole group.' : ''))) return;
       results = results.filter(r => r.id !== b.dataset.del); saveResults(); renderResults(); queue('deleteResult', { wid: wsId, id: b.dataset.del }, 'res:' + b.dataset.del);
     });
+    L.querySelectorAll('[data-edit]').forEach(b => b.onclick = () => editStudent(b.dataset.edit));
     L.querySelectorAll('[data-pdf]').forEach(b => b.onclick = () => { const r = results.find(x => x.id === b.dataset.pdf); if (r) pdfStudents([r], pdfMsg); });
   }
 
@@ -958,16 +971,14 @@
       <div><button class="b sm" data-acc="${esc(q.rid)}">Accept</button> <button class="b red sm" data-dec="${esc(q.rid)}">Decline</button></div></div>`).join('') : '<p class="hint">No invitations.</p>';
     $('#invIn').querySelectorAll('[data-acc]').forEach(b => b.onclick = async () => { await act('respond', { rid: b.dataset.acc, accept: true }); renderGroups(); });
     $('#invIn').querySelectorAll('[data-dec]').forEach(b => b.onclick = async () => { await act('respond', { rid: b.dataset.dec, accept: false }); renderGroups(); });
-    const gs = isAdmin() ? dir.groups.slice() : myGroups(), L = $('#grpList');
-    const canDel = g => isAdmin() || g.members.some(m => m.id === A.user.id && m.role === 'owner');
+    const gs = myGroups(), L = $('#grpList');
     L.innerHTML = gs.length ? gs.map(g => `<div class="card"><b>${esc(groupLabel(g))}</b>${'g:' + g.gid === wsId ? '<span class="chip g">open now</span>' : ''}
       <div class="hint">Members</div>${g.members.map(m => `<div class="act">${esc(m.name)} • ${esc(m.id)}${m.role === 'owner' ? ' ★' : ''}</div>`).join('')}
       ${dir.requests.filter(q => q.gid === g.gid).map(q => `<div class="act">⏳ Waiting: ${esc(q.toName)} (${esc(q.to)}), invited by ${esc(q.fromName)}</div>`).join('')}
       <div class="sm2" style="margin-top:8px"><input list="dlUsers" placeholder="ID (mobile) of the user to invite" data-inv="${esc(g.gid)}"><button class="b sm" data-send="${esc(g.gid)}">Send request</button></div>
       <button class="b alt sm" data-use="${esc(g.gid)}" style="margin-top:8px">Open this group</button>
       <button class="b alt sm" data-ren="${esc(g.gid)}" style="margin-top:8px">Rename</button>
-      ${isMemberOf(g) ? `<button class="b alt sm" data-leave="${esc(g.gid)}" style="margin-top:8px">Leave</button>` : ''}
-      ${canDel(g) ? `<button class="b red sm" data-delgrp="${esc(g.gid)}" data-gn="${esc(groupLabel(g))}" style="margin-top:8px">🗑 Delete group</button>` : ''}<div class="msg" data-gm="${esc(g.gid)}"></div></div>`).join('')
+      <button class="b red sm" data-leave="${esc(g.gid)}" style="margin-top:8px">Leave</button><div class="msg" data-gm="${esc(g.gid)}"></div></div>`).join('')
       : '<div class="card"><p class="hint">You are not in any group yet. Create one above, or accept an invitation.</p></div>';
     L.querySelectorAll('[data-send]').forEach(b => b.onclick = async () => {
       const gid = b.dataset.send, inp = L.querySelector('[data-inv="' + gid + '"]'), msg = L.querySelector('[data-gm="' + gid + '"]');
@@ -979,13 +990,6 @@
     L.querySelectorAll('[data-ren]').forEach(b => b.onclick = async () => {
       const g = gs.find(x => x.gid === b.dataset.ren), n = prompt('Group name', g.name); if (n === null) return;
       await act('renameGroup', { gid: g.gid, name: n }); renderGroups();
-    });
-    L.querySelectorAll('[data-delgrp]').forEach(b => b.onclick = async () => {
-      if (!confirm('Delete the group “' + b.dataset.gn + '”?\n\nAll its members are removed and ALL its answer keys, results and question papers are deleted for everybody. Personal workspaces are not touched.\n\nThis cannot be undone.')) return;
-      const gid = b.dataset.delgrp; await flush();
-      const r = await api('deleteGroup', { gid });
-      if (r && r.ok) { if (wsId === 'g:' + gid) loadWs(personalWid()); await pullDir(); fillWsSel(); renderGroups(); toast('Group deleted.'); }
-      else toast(trErr(r && r.error) || 'Could not delete the group.');
     });
     L.querySelectorAll('[data-leave]').forEach(b => b.onclick = async () => {
       if (!confirm('Leave this group? You will no longer see its answer keys and results.')) return;
