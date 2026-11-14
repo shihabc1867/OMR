@@ -12,14 +12,14 @@
   };
 
   // ---------- state ----------
-  const DEF = { per: 1, neg: 0.25, timerPct: 3, thr: 0.3, fillPct: 70, passPct: 40 };
+  const DEF = { per: 1, neg: 0.25, timerPct: 3, thr: 0.3, fillPct: 70, passPct: 40, secPass: 40 };
   const oldSet = LS.get('omr_settings', {});                         // settings of the older single-user version
   const DEV = Object.assign({ thr: oldSet.thr || DEF.thr, fillPct: oldSet.fillPct || DEF.fillPct }, LS.get('omr_device', {}));   // this phone only
   if (!DEV.dv || DEV.dv < 2) { DEV.thr = DEF.thr; DEV.dv = 2; LS.set('omr_device', DEV); }       // v2: the new, stricter ink detection needs its own default strictness
-  let WSS = { per: DEF.per, neg: DEF.neg, timerPct: DEF.timerPct, passPct: DEF.passPct, header: { l1: '', l2: '', l3: '', l4: 'Result Sheet' } };   // rules + heading of the open workspace
+  let WSS = { per: DEF.per, neg: DEF.neg, timerPct: DEF.timerPct, passPct: DEF.passPct, secPass: DEF.secPass, header: { l1: '', l2: '', l3: '', l4: 'Result Sheet' } };   // rules + heading of the open workspace
   let WLOGO = '';
   let S = Object.assign({}, DEF);                                     // merged view used by the scanner/scoring code
-  const applyS = () => { S = Object.assign({}, DEF, { per: WSS.per, neg: WSS.neg, timerPct: WSS.timerPct, passPct: WSS.passPct }, { thr: DEV.thr, fillPct: DEV.fillPct }); };
+  const applyS = () => { S = Object.assign({}, DEF, { per: WSS.per, neg: WSS.neg, timerPct: WSS.timerPct, passPct: WSS.passPct, secPass: WSS.secPass }, { thr: DEV.thr, fillPct: DEV.fillPct }); };
   let A = LS.get('omr_auth', null);                                   // { url, token, user }
   let dir = LS.get('omr_dir', { users: [], groups: [], requests: [] });
   let wsId = '';
@@ -46,7 +46,7 @@
   const num = (v, d) => (typeof v === 'number' && isFinite(v) ? v : d);
   function normWss(s) {
     s = s || {}; const h = s.header || {};
-    return { per: num(s.per, DEF.per), neg: num(s.neg, DEF.neg), timerPct: num(s.timerPct, DEF.timerPct), passPct: num(s.passPct, DEF.passPct),
+    return { per: num(s.per, DEF.per), neg: num(s.neg, DEF.neg), timerPct: num(s.timerPct, DEF.timerPct), passPct: num(s.passPct, DEF.passPct), secPass: num(s.secPass, DEF.secPass),
       header: { l1: h.l1 || '', l2: h.l2 || '', l3: h.l3 || '', l4: h.l4 == null ? 'Result Sheet' : h.l4 } };
   }
   function toast(t) {
@@ -241,7 +241,54 @@
       x.beginPath(); x.ellipse(p[0], p[1], tpl.rx - 1, tpl.ry - 1, 0, 0, 7); x.fillStyle = '#111'; x.fill();
     });
     $('#keyCount').textContent = 'Answers set: ' + qs.length + ' of ' + tpl.groups.length + ' questions';
+    secNote();
   }
+  // ---------- sections of an answer key (optional): e.g. Bangla 1-15, English 16-50 ----------
+  const MAXSEC = 6;
+  const secList = () => (keyState.sections = keyState.sections || []);
+  const rangeText = a => { const o = []; let i = 0; while (i < a.length) { let j = i; while (j + 1 < a.length && a[j + 1] === a[j] + 1) j++; o.push(j > i ? a[i] + '–' + a[j] : String(a[i])); i = j + 1; } return o.join(', '); };
+  function secValidate(L, n) {
+    const clean = [];
+    for (let i = 0; i < L.length; i++) {
+      const t = L[i], f = t.from, e = t.to, nm = String(t.name || '').trim() || 'Section ' + (i + 1);
+      if (!(f >= 1 && e >= 1)) return { error: 'Section ' + (i + 1) + ': enter the first and the last question number (or remove the section with ✕).' };
+      if (f > e) return { error: 'Section “' + nm + '”: the first question must not come after the last.' };
+      if (e > n) return { error: 'Section “' + nm + '”: this sheet has only ' + n + ' questions.' };
+      clean.push({ name: nm, from: f, to: e });
+    }
+    clean.sort((a, b) => a.from - b.from);
+    for (let i = 1; i < clean.length; i++) if (clean[i].from <= clean[i - 1].to) return { error: 'Sections “' + clean[i - 1].name + '” and “' + clean[i].name + '” overlap.' };
+    return { clean };
+  }
+  function renderSecs() {
+    const L = secList(), n = keyTpl().groups.length, v = x => (x == null ? '' : x);
+    $('#secList').innerHTML = L.map((t, i) => `<div class="secrow" data-i="${i}"><input data-f="name" value="${esc(t.name || '')}" placeholder="Section name"><input data-f="from" type="number" min="1" max="${n}" inputmode="numeric" placeholder="From" value="${v(t.from)}"><input data-f="to" type="number" min="1" max="${n}" inputmode="numeric" placeholder="To" value="${v(t.to)}"><button class="b red sm" data-rm="${i}" title="Remove">✕</button></div>`).join('');
+    secNote();
+  }
+  function secNote() {
+    const L = secList(), m = $('#secNote'); if (!m) return;
+    if (!L.length) { m.textContent = ''; return; }
+    const v = secValidate(L, keyTpl().groups.length), c = v.clean || [];
+    const out = Object.keys(keyState.answers).map(Number).filter(q => !c.some(t => q >= t.from && q <= t.to)).sort((a, b) => a - b);
+    m.style.color = v.error ? '#b45309' : '';
+    m.textContent = (v.error ? '⚠ ' + v.error + ' ' : '') + (!v.error && out.length ? 'Answered questions not in any section (counted only in the total): ' + rangeText(out) + '.' : '');
+  }
+  $('#secAdd').onclick = () => {
+    const L = secList(), n = keyTpl().groups.length;
+    if (L.length >= MAXSEC) { toast('At most ' + MAXSEC + ' sections.'); return; }
+    const last = L.reduce((a, t) => Math.max(a, t.to || 0), 0);
+    if (last >= n) { toast('All ' + n + ' questions are already in sections.'); return; }
+    const top = Math.max.apply(null, [0].concat(Object.keys(keyState.answers).map(Number))) || n;      // the first section suggests "all answered questions"; just change the numbers
+    L.push({ name: 'Section ' + (L.length + 1), from: last + 1, to: last < top ? top : n }); renderSecs();
+  };
+  $('#secList').addEventListener('input', e => {
+    const row = e.target.closest('.secrow'); if (!row) return; const t = secList()[Number(row.dataset.i)]; if (!t) return;
+    const f = e.target.dataset.f; if (f === 'name') t.name = e.target.value; else { const x = parseInt(e.target.value, 10); t[f] = isNaN(x) ? null : x; }
+    secNote();
+  });
+  $('#secList').addEventListener('click', e => { const b = e.target.closest('[data-rm]'); if (!b) return; secList().splice(Number(b.dataset.rm), 1); renderSecs(); });
+  const rememberSecs = (id, sec) => { const m = LS.get('omr_secs', {}); if (sec && sec.length) m[id] = sec; else delete m[id]; LS.set('omr_secs', m); };
+
   keyCv.onclick = ev => {
     const tpl = keyTpl(), h = hit(keyCv, ev, tpl); if (!h) return;
     const q = String(h[0] + 1);
@@ -250,19 +297,20 @@
   };
   $('#keySel').onchange = () => {
     const id = $('#keySel').value;
-    keyState = id && keys[id] ? { id, tplId: keys[id].tplId, answers: Object.assign({}, keys[id].answers) } : { id: '', tplId: $('#keyTpl').value || 'builtin', answers: {} };
-    $('#keyName').value = id ? keys[id].name : ''; fillSelects(); renderKey();
+    keyState = id && keys[id] ? { id, tplId: keys[id].tplId, answers: Object.assign({}, keys[id].answers), sections: (keys[id].sections || []).map(t => Object.assign({}, t)) } : { id: '', tplId: $('#keyTpl').value || 'builtin', answers: {}, sections: [] };
+    $('#keyName').value = id ? keys[id].name : ''; fillSelects(); renderSecs(); renderKey();
   };
-  $('#keyTpl').onchange = () => { keyState = { id: '', tplId: $('#keyTpl').value, answers: {} }; renderKey(); };
+  $('#keyTpl').onchange = () => { keyState = { id: '', tplId: $('#keyTpl').value, answers: {}, sections: [] }; renderSecs(); renderKey(); };
   $('#keyClear').onclick = () => { keyState.answers = {}; renderKey(); };
 
   $('#keySave').onclick = async () => {
     const msg = $('#keyMsg'); msg.className = 'msg';
     if (!Object.keys(keyState.answers).length) { msg.textContent = 'Set the answer for at least one question.'; return; }
+    const sv = secValidate(secList(), keyTpl().groups.length); if (sv.error) { msg.textContent = sv.error; return; }
     const id = keyState.id || 'k' + Date.now().toString(36) + Math.floor(Math.random() * 1296).toString(36);
     const name = $('#keyName').value.trim() || 'Answer key ' + (Object.keys(keys).length + 1);
-    keys[id] = { id, name, tplId: keyState.tplId, answers: Object.assign({}, keyState.answers) };
-    keyState.id = id; $('#keyName').value = name; saveKeys(); fillSelects(); renderKey();
+    keys[id] = { id, name, tplId: keyState.tplId, answers: Object.assign({}, keyState.answers), sections: sv.clean };
+    keyState.id = id; keyState.sections = sv.clean.map(t => Object.assign({}, t)); rememberSecs(id, sv.clean); $('#keyName').value = name; saveKeys(); fillSelects(); renderSecs(); renderKey();
     msg.className = 'msg ok'; msg.textContent = '✔ Saved on this phone — sharing…';
     const r = await queue('saveKey', { wid: wsId, key: keys[id] }, 'key:' + id);
     if (r.ok) msg.textContent = '✔ Saved' + (wsId.indexOf('g:') === 0 ? ' and shared with the group.' : '.');
@@ -273,8 +321,8 @@
     const id = keyState.id;
     if (!id) { $('#keyMsg').className = 'msg'; $('#keyMsg').textContent = 'Select a saved answer key first.'; return; }
     if (!confirm('Delete this answer key?' + (wsId.indexOf('g:') === 0 ? ' It will be deleted for the whole group.' : ''))) return;
-    delete keys[id]; saveKeys(); keyState = { id: '', tplId: 'builtin', answers: {} }; $('#keyName').value = '';
-    fillSelects(); renderKey(); queue('deleteKey', { wid: wsId, id }, 'key:' + id);
+    delete keys[id]; saveKeys(); rememberSecs(id, null); keyState = { id: '', tplId: 'builtin', answers: {}, sections: [] }; $('#keyName').value = '';
+    fillSelects(); renderSecs(); renderKey(); queue('deleteKey', { wid: wsId, id }, 'key:' + id);
   };
   function download(blob, name) {
     const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = name;
@@ -381,6 +429,22 @@
   $('#timerBtn').onclick = () => { timerOn = !timerOn; updateTimerBtn(); refreshResult(); };
   $('#scanKey').onchange = () => { if ($('#scanArea').hidden === false) { $('#scanArea').hidden = true; sc = { sel: null }; submitted = false; } };
 
+  const secPct = () => (S.secPass == null ? 40 : S.secPass);
+  // Result of every section of the key: correct / wrong / blank and marks (negative marking applied). Fails when the section percent is below the section pass mark.
+  function computeSections(sel, key, bad) {
+    const L = key && key.sections; if (!L || !L.length) return [];
+    return L.map(t => {
+      let c = 0, w = 0, b = 0, n = 0;
+      for (let q = t.from; q <= t.to; q++) {
+        if (key.answers[q] === undefined) continue; n++;
+        const s = (sel && sel[q - 1]) || [];
+        if (bad && bad.has(q - 1)) w++;
+        else if (!s.length) b++; else if (s.length === 1 && s[0] === key.answers[q]) c++; else w++;
+      }
+      const total = n * S.per, neg = w * S.neg, fin = c * S.per - neg, pct = total ? fin / total * 100 : 0;
+      return { name: t.name, from: t.from, to: t.to, c, w, b, n, total, neg, fin, pct, fail: n > 0 && pct < secPct() };
+    });
+  }
   function compute(sel, key, tOn, bad) {
     let c = 0, w = 0, b = 0; const wrongQs = [], qs = Object.keys(key.answers).map(Number).sort((a, z) => a - z);
     qs.forEach(q => {
@@ -389,7 +453,7 @@
       else if (!s.length) b++; else if (s.length === 1 && s[0] === key.answers[q]) c++; else { w++; wrongQs.push(q); }
     });
     const total = qs.length * S.per, neg = w * S.neg, tim = tOn ? total * S.timerPct / 100 : 0;
-    return { c, w, b, n: qs.length, total, neg, tim, fin: c * S.per - neg - tim, wrongQs };          // may be negative: shown as it is
+    return { c, w, b, n: qs.length, total, neg, tim, fin: c * S.per - neg - tim, wrongQs, secs: computeSections(sel, key, bad) };          // may be negative: shown as it is
   }
   function showResult(r) {
     $('#rC').textContent = r.c; $('#rW').textContent = r.w; $('#rB').textContent = r.b;
@@ -397,6 +461,10 @@
     $('#rT').textContent = timerOn ? '− ' + fmt(r.tim) : '0';
     $('#rF').textContent = fmt(r.fin) + ' / ' + fmt(r.total);
     $('#rS').textContent = '+' + fmt(S.per) + ' per correct, −' + fmt(S.neg) + ' per wrong (multiple or partly filled marks count as wrong)';
+    const secs = r.secs || [], f = isFail(r);
+    $('#rSecs').innerHTML = secs.map(t => `<div class="sr${t.fail ? ' bad' : ''}"><b>${esc(t.name)}</b> (Q${t.from}–${t.to})${t.fail ? ' — <b>FAILED</b> (below ' + fmt(secPct()) + '%)' : ''}<br>Correct ${t.c} • Wrong ${t.w} • Blank ${t.b} • <b>${fmt(t.fin)} / ${fmt(t.total)}</b> (${p1(t.pct)}%)</div>`).join('');
+    $('#rF').classList.toggle('bad', f);
+    const st = $('#rStat'); st.textContent = f ? 'FAILED — below ' + fmt(passPct()) + '% of the total marks' : 'Passed'; st.style.color = f ? '#dc2626' : '#0f766e';
     $('#resBox').hidden = false;
   }
 
@@ -426,7 +494,10 @@
     if (!(r.fit >= 0.1) || r.ambiguous || n < 3 || sc.bad.size) { LiveCam.close(); return { review: true }; }   // doubtful: show the review screen (message is already set)
     $('#submitBtn').onclick();
     const out = { rid: sc.rid, name: stuNow().name, id: stuNow().id, correct: $('#rC').textContent, wrong: $('#rW').textContent, blank: $('#rB').textContent, score: $('#rF').textContent };
-    const w = $('#scanMsg').textContent; if (w.indexOf('already has a result') > 0) out.warn = w.replace(/^⚠\s*/, '');
+    const w = $('#scanMsg').textContent, notes = [], rec = results.find(x => x.id === out.rid);
+    if (w.indexOf('already has a result') > 0) notes.push(w.replace(/^⚠\s*/, ''));
+    if (rec) { if (isFail(rec)) notes.push('FAILED (below ' + fmt(passPct()) + '%)'); secsOf(rec).filter(t => t.fail).forEach(t => notes.push('Failed section: ' + t.name)); }
+    if (notes.length) out.warn = notes.join(' • ');
     sc = { sel: null }; submitted = false; $('#scanArea').hidden = true; $('#resBox').hidden = true; $('#stuName').value = ''; $('#stuId').value = '';
     smsg('Saved: ' + out.score + ' (' + (out.name || 'Unknown') + '). Live camera is on.', true);
     return out;
@@ -467,6 +538,13 @@
   const isFail = r => pctOf(r) < passPct();
   const p1 = x => String(Math.round(x * 10) / 10);
   const nameOf = r => r.student || 'Unknown';
+  // sections of a saved result: worked out again from the key (so a later change of the sections or pass mark applies); the copy saved with the result is the fallback
+  function secsOf(r) {
+    const key = keys[r.keyId];
+    if (key && key.sections && key.sections.length && r.sel) return computeSections(r.sel, key, new Set(r.bad || []));
+    return (r.secs || []).map(t => Object.assign({}, t, { fail: t.n > 0 && t.pct < secPct() }));
+  }
+  const secLines = r => secsOf(r).map(t => '<br><span style="' + (t.fail ? 'color:#dc2626;font-weight:700' : '') + '">' + esc(t.name) + ': ' + t.c + ' correct • ' + t.w + ' wrong • ' + t.b + ' blank = ' + fmt(t.fin) + '/' + fmt(t.total) + ' (' + p1(t.pct) + '%)' + (t.fail ? ' — FAILED' : '') + '</span>').join('');
     function ranked(keyId) {
     // Highest score first; same score -> fewer wrong answers first; still equal -> the sheet scanned earlier first. Every student gets his own rank.
     const L = results.filter(r => r.keyId === keyId).sort((x, y) => y.fin - x.fin || x.w - y.w || y.c - x.c || x.t - y.t);
@@ -514,7 +592,7 @@
       const R = ranked(kid); if (!R.length) return '';
       const fails = R.filter(x => isFail(x.r)).length;
       return `<div class="grp">${esc(R[0].r.keyName)} — ${R.length} student(s)${fails ? ', ' + fails + ' below ' + fmt(passPct()) + '%' : ''}</div>` + R.map(({ r, rank }) =>
-        `<div class="item${isFail(r) ? ' fail' : ''}"><div><span class="rk">${rank}</span><b>${esc(nameOf(r))}</b>${r.sid ? ' • ID ' + esc(r.sid) : ''}<small>Correct ${r.c} • Wrong ${r.w} • Blank ${r.b}${r.timer ? ' • Timer penalty' : ''} • ${p1(pctOf(r))}%<br>${esc(new Date(r.t).toLocaleString())}${r.by ? ' • by ' + esc(r.by) : ''}${r.wrongQs && r.wrongQs.length ? '<br>Wrong Q: ' + esc(r.wrongQs.join(', ')) : ''}</small></div>
+        `<div class="item${isFail(r) ? ' fail' : ''}"><div><span class="rk">${rank}</span><b>${esc(nameOf(r))}</b>${r.sid ? ' • ID ' + esc(r.sid) : ''}<small>Correct ${r.c} • Wrong ${r.w} • Blank ${r.b}${r.timer ? ' • Timer penalty' : ''} • ${p1(pctOf(r))}%${isFail(r) ? ' • FAILED' : ''}${secLines(r)}<br>${esc(new Date(r.t).toLocaleString())}${r.by ? ' • by ' + esc(r.by) : ''}${r.wrongQs && r.wrongQs.length ? '<br>Wrong Q: ' + esc(r.wrongQs.join(', ')) : ''}</small></div>
         <div style="text-align:right"><b class="ok">${fmt(r.fin)}/${fmt(r.total)}</b><br><button class="b alt sm" data-edit="${esc(r.id)}">✏️ Edit</button> <button class="b alt sm" data-pdf="${esc(r.id)}">PDF</button> <button class="b red sm" data-del="${esc(r.id)}">Delete</button></div></div>`).join('');
     }).join('');
     L.querySelectorAll('[data-del]').forEach(b => b.onclick = () => {
@@ -539,19 +617,21 @@
   const safeName = s => String(s || '').replace(/[^\w\u0980-\u09FF.-]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 40) || 'file';
   function answersOf(r) {
     const key = keys[r.keyId]; if (!key) return null;
-    const tpl = getTpl(key.tplId), lab = (tpl && tpl.labels) || ['A', 'B', 'C', 'D', 'E', 'F'], bad = new Set(r.bad || []), wr = new Set(r.wrongQs || []);
+    const tpl = getTpl(key.tplId), lab = (tpl && tpl.labels) || ['A', 'B', 'C', 'D', 'E', 'F'], bad = new Set(r.bad || []), wr = new Set(r.wrongQs || []), failAll = isFail(r), fsec = secsOf(r).filter(t => t.fail);
     return Object.keys(key.answers).map(Number).sort((x, y) => x - y).map(q => {
       const s = (r.sel && r.sel[q - 1]) || [];
-      return { q, mine: s.length ? s.map(i => lab[i] || i + 1).join('+') : '–', good: lab[key.answers[q]] || key.answers[q], wrong: wr.has(q), multi: bad.has(q - 1), answered: s.length > 0 };
+      return { q, mine: s.length ? s.map(i => lab[i] || i + 1).join('+') : '–', good: lab[key.answers[q]] || key.answers[q], wrong: wr.has(q), multi: bad.has(q - 1), answered: s.length > 0, red: failAll || fsec.some(t => q >= t.from && q <= t.to) };
     });
   }
+  const secHeads = r => secsOf(r).map(t => ({ name: t.name, total: t.total }));
+  const secCells = r => secsOf(r).map(t => ({ fin: t.fin, fail: t.fail }));
   async function pdfMerit(msg) {
     const ids = selKeyIds().filter(k => ranked(k).length); if (!ids.length) { alert('No results to put in the PDF.'); return; }
     if (!(await needReport())) { msg(NO_REPORT); return; }
     msg('Creating PDF…'); const logo = await Report.loadImage(WLOGO), doc = new Report.Doc();
     for (const kid of ids) {
       const R = ranked(kid); await tick();
-      Report.merit({ header: WSS.header, logo, caption: R[0].r.keyName, rows: R.map(({ r, rank }) => ({ rank, id: r.sid || '', name: nameOf(r), pos: r.c, neg: r.w, total: r.fin, color: rowColor(r, rank) })) }, c => doc.add(c));
+      Report.merit({ header: WSS.header, logo, caption: R[0].r.keyName, secHeads: secHeads(R[0].r), rows: R.map(({ r, rank }) => ({ rank, id: r.sid || '', name: nameOf(r), pos: r.c, neg: r.w, total: r.fin, secs: secCells(r), color: rowColor(r, rank) })) }, c => doc.add(c));
     }
     download(doc.blob(), 'Merit-list' + (ids.length === 1 ? '-' + safeName(ranked(ids[0])[0].r.keyName) : '') + '.pdf');
     msg('✔ PDF downloaded (' + doc.pages() + ' page' + (doc.pages() > 1 ? 's' : '') + ').');
@@ -562,15 +642,20 @@
     msg('Creating PDF…'); const logo = await Report.loadImage(WLOGO), doc = new Report.Doc();
     for (let i = 0; i < list.length; i++) {
       const r = list[i], me = ranked(r.keyId).find(x => x.r.id === r.id), rank = me ? me.rank : 1, f = isFail(r), col = rowColor(r, rank);
+      const secs = secsOf(r), c0 = f ? '#e11d1d' : '#000';
       const lines = [
         { t: 'Merit position: ' + rank + ' of ' + (me ? me.n : 1), color: col, bold: true },
-        { t: f ? 'Result: Below the pass mark (' + fmt(passPct()) + '%)' : 'Result: Passed', color: f ? '#e11d1d' : '#000', bold: true },
-        { t: 'Marks: ' + fmt(r.fin) + ' / ' + fmt(r.total) + '  (' + p1(pctOf(r)) + '%)', color: col },
-        { t: 'Correct ' + r.c + '     Wrong ' + r.w + '     Unanswered ' + r.b },
-        { t: 'Wrong-answer penalty: − ' + fmt(r.neg) + (r.timer ? '     Second Timer penalty: − ' + fmt(r.tim) : '') }
+        { t: f ? 'Result: FAILED — below the pass mark (' + fmt(passPct()) + '% of the total marks)' : 'Result: Passed', color: c0, bold: true },
+        { t: 'Total marks: ' + fmt(r.fin) + ' / ' + fmt(r.total) + '  (' + p1(pctOf(r)) + '%)', color: col },
+        { t: 'Total — Correct ' + r.c + '     Wrong ' + r.w + '     Unanswered ' + r.b, color: c0 },
+        { t: 'Wrong-answer penalty: − ' + fmt(r.neg) + (r.timer ? '     Second Timer penalty: − ' + fmt(r.tim) : ''), color: c0 }
       ];
+      if (secs.length) {
+        lines.push({ t: 'Section-wise result', color: c0, bold: true });
+        secs.forEach(t => lines.push({ t: t.name + ' (Q' + t.from + '–' + t.to + '):  Correct ' + t.c + '   Wrong ' + t.w + '   Blank ' + t.b + '   Marks ' + fmt(t.fin) + ' / ' + fmt(t.total) + ' (' + p1(t.pct) + '%)' + (t.fail ? '   FAILED (below ' + fmt(secPct()) + '%)' : ''), color: (f || t.fail) ? '#e11d1d' : '#000', bold: t.fail }));
+      }
       await tick(); msg('Creating PDF… ' + (i + 1) + ' / ' + list.length);
-      Report.student({ header: WSS.header, logo, caption: r.keyName, row: { rank, id: r.sid || '', name: nameOf(r), pos: r.c, neg: r.w, total: r.fin, color: col }, lines, answers: answersOf(r) }, c => doc.add(c));
+      Report.student({ header: WSS.header, logo, caption: r.keyName, secHeads: secHeads(r), row: { rank, id: r.sid || '', name: nameOf(r), pos: r.c, neg: r.w, total: r.fin, secs: secCells(r), color: col }, lines, answers: answersOf(r) }, c => doc.add(c));
     }
     download(doc.blob(), (list.length === 1 ? 'Result-' + safeName(list[0].sid || list[0].student) : 'All-results') + '.pdf');
     msg('✔ PDF downloaded (' + doc.pages() + ' page' + (doc.pages() > 1 ? 's' : '') + ').');
@@ -579,8 +664,16 @@
   $('#pdfEach').onclick = () => { const all = []; selKeyIds().forEach(kid => ranked(kid).forEach(x => all.push(x.r))); pdfStudents(all, pdfMsg); };
   $('#resCsv').onclick = () => {
     const q = v => '"' + String(v).replace(/"/g, '""') + '"';
-    const rows = [['Rank', 'Name', 'Roll/ID', 'Answer key', 'Time', 'Correct', 'Wrong', 'Unanswered', 'Total marks', 'Wrong penalty', 'Timer penalty', 'Score', 'Percent', 'Status', 'Scanned by', 'Wrong questions']];
-    selKeyIds().forEach(kid => ranked(kid).forEach(({ r, rank }) => rows.push([rank, nameOf(r), r.sid || '', r.keyName, new Date(r.t).toLocaleString(), r.c, r.w, r.b, r.total, r.neg, r.tim, r.fin, p1(pctOf(r)), isFail(r) ? 'Below pass mark' : 'Pass', r.by || '', (r.wrongQs || []).join(' ')])));
+    const all = []; selKeyIds().forEach(kid => ranked(kid).forEach(x => all.push(x)));
+    const names = []; all.forEach(({ r }) => secsOf(r).forEach(t => { if (names.indexOf(t.name) < 0) names.push(t.name); }));
+    const head = ['Rank', 'Name', 'Roll/ID', 'Answer key', 'Time', 'Correct', 'Wrong', 'Unanswered', 'Total marks', 'Wrong penalty', 'Timer penalty', 'Score', 'Percent', 'Status', 'Scanned by', 'Wrong questions'];
+    names.forEach(n => head.push(n + ' correct', n + ' wrong', n + ' blank', n + ' marks', n + ' percent', n + ' status'));
+    const rows = [head];
+    all.forEach(({ r, rank }) => {
+      const row = [rank, nameOf(r), r.sid || '', r.keyName, new Date(r.t).toLocaleString(), r.c, r.w, r.b, r.total, r.neg, r.tim, r.fin, p1(pctOf(r)), isFail(r) ? 'Fail' : 'Pass', r.by || '', (r.wrongQs || []).join(' ')];
+      const sc2 = secsOf(r); names.forEach(n => { const t = sc2.find(x => x.name === n); if (t) row.push(t.c, t.w, t.b, t.fin, p1(t.pct), t.fail ? 'Fail' : 'Pass'); else row.push('', '', '', '', '', ''); });
+      rows.push(row);
+    });
     download(new Blob(['\ufeff' + rows.map(r => r.map(q).join(',')).join('\n')], { type: 'text/csv;charset=utf-8' }), 'omr-results.csv');
   };
   $('#resSync').onclick = async () => { await pullWs(true); renderResults(); };
@@ -831,9 +924,9 @@
     wsId = wid; LS.set('omr_ws_' + A.user.id, wid); lastSig = '';
     const c = LS.get(wsKey(wid), null) || {};
     keys = c.keys || {}; results = c.results || []; papers = c.papers || {}; paperImages = LS.get('omr_pi_' + wsId, {}) || {}; WSS = normWss(c.settings); WLOGO = c.logo || ''; logoDraft = null; applyS();
-    keyState = { id: '', tplId: 'builtin', answers: {} }; sc = { sel: null }; submitted = false;
+    keyState = { id: '', tplId: 'builtin', answers: {}, sections: [] }; sc = { sel: null }; submitted = false;
     $('#keyName').value = ''; $('#scanArea').hidden = true; $('#resBox').hidden = true;
-    fillSelects(); renderKey(); updateTimerBtn(); fillWsForm(); renderResults();
+    fillSelects(); renderSecs(); renderKey(); updateTimerBtn(); fillWsForm(); renderResults();
     if (window.Paper && Paper.reset) { Paper.reset(); }
   }
   $('#wsSel').onchange = async () => { const v = $('#wsSel').value; await flush(); loadWs(v); pullWs(true); };
@@ -846,13 +939,18 @@
     if (!r || !r.ok) { if (loud) toast(trErr(r && r.error)); return; }
     if (wid !== wsId || outbox.length) return;
     const nk = {}; r.keys.forEach(k => { nk[k.id] = k; });
+    { const sm = LS.get('omr_secs', {}); let ch = false;      // sections: use the server's copy; if the server does not return the field, keep this phone's copy
+      Object.keys(nk).forEach(id => { const k = nk[id];
+        if (Array.isArray(k.sections)) { if (JSON.stringify(sm[id] || []) !== JSON.stringify(k.sections)) { if (k.sections.length) sm[id] = k.sections; else delete sm[id]; ch = true; } }
+        else if (sm[id] && sm[id].length) k.sections = sm[id]; });
+      if (ch) LS.set('omr_secs', sm); }
     const np = {}; (r.papers || []).forEach(p => { np[p.id] = p; });
     const ni = {}; (r.images || []).forEach(m => { ni[m.id] = m.data; });
     const nset = normWss(r.settings), sig = JSON.stringify([nk, r.results, nset, r.logo, np, Object.keys(ni).sort()]);
     if (sig === lastSig) { if (loud) toast('Up to date.'); return; }
     const setChanged = JSON.stringify(nset) !== JSON.stringify(WSS) || r.logo !== WLOGO;
     lastSig = sig; keys = nk; papers = np; paperImages = ni; results = r.results; WSS = nset; WLOGO = r.logo || ''; applyS(); saveWsCache();
-    if (keyState.id && !keys[keyState.id]) { keyState = { id: '', tplId: 'builtin', answers: {} }; $('#keyName').value = ''; }
+    if (keyState.id && !keys[keyState.id]) { keyState = { id: '', tplId: 'builtin', answers: {}, sections: [] }; $('#keyName').value = ''; renderSecs(); }
     fillSelects(); renderKey(); updateTimerBtn(); if (setChanged && !logoDraft && !$('#v-set').classList.contains('on')) fillWsForm();
     if ($('#v-res').classList.contains('on')) renderResults();
     if (submitted) refreshResult();
@@ -902,7 +1000,7 @@
   // ---------- Settings tab (rules + heading of the open workspace, and this phone) ----------
   let logoDraft = null;
   function fillWsForm() {
-    $('#sPer').value = WSS.per; $('#sNeg').value = WSS.neg; $('#sTim').value = WSS.timerPct; $('#sPass').value = WSS.passPct;
+    $('#sPer').value = WSS.per; $('#sNeg').value = WSS.neg; $('#sTim').value = WSS.timerPct; $('#sPass').value = WSS.passPct; $('#sSecPass').value = WSS.secPass;
     $('#hL1').value = WSS.header.l1; $('#hL2').value = WSS.header.l2; $('#hL3').value = WSS.header.l3; $('#hL4').value = WSS.header.l4;
     showLogo();
     $('#sThr').value = DEV.thr; $('#sFill').value = DEV.fillPct;
@@ -936,9 +1034,9 @@
   $('#logoDel').onclick = () => { logoDraft = ''; showLogo(); };
   $('#sSave').onclick = async () => {
     const m = $('#sMsg'); m.className = 'msg';
-    const per = parseFloat($('#sPer').value), neg = parseFloat($('#sNeg').value), tp = parseFloat($('#sTim').value), pp = parseFloat($('#sPass').value);
-    if ([per, neg, tp, pp].some(isNaN) || pp < 0 || pp > 100 || per < 0 || neg < 0 || tp < 0 || tp > 100) { m.textContent = 'Please enter valid values.'; return; }
-    WSS = normWss({ per, neg, timerPct: tp, passPct: pp, header: { l1: $('#hL1').value.trim(), l2: $('#hL2').value.trim(), l3: $('#hL3').value.trim(), l4: $('#hL4').value.trim() } });
+    const per = parseFloat($('#sPer').value), neg = parseFloat($('#sNeg').value), tp = parseFloat($('#sTim').value), pp = parseFloat($('#sPass').value), sp = parseFloat($('#sSecPass').value);
+    if ([per, neg, tp, pp, sp].some(isNaN) || pp < 0 || pp > 100 || sp < 0 || sp > 100 || per < 0 || neg < 0 || tp < 0 || tp > 100) { m.textContent = 'Please enter valid values.'; return; }
+    WSS = normWss({ per, neg, timerPct: tp, passPct: pp, secPass: sp, header: { l1: $('#hL1').value.trim(), l2: $('#hL2').value.trim(), l3: $('#hL3').value.trim(), l4: $('#hL4').value.trim() } });
     if (logoDraft != null) WLOGO = logoDraft; logoDraft = null;
     applyS(); saveWsCache(); updateTimerBtn(); refreshResult(); fillWsForm();
     m.className = 'msg ok'; m.textContent = '✔ Saved on this phone — sharing…';
@@ -971,14 +1069,16 @@
       <div><button class="b sm" data-acc="${esc(q.rid)}">Accept</button> <button class="b red sm" data-dec="${esc(q.rid)}">Decline</button></div></div>`).join('') : '<p class="hint">No invitations.</p>';
     $('#invIn').querySelectorAll('[data-acc]').forEach(b => b.onclick = async () => { await act('respond', { rid: b.dataset.acc, accept: true }); renderGroups(); });
     $('#invIn').querySelectorAll('[data-dec]').forEach(b => b.onclick = async () => { await act('respond', { rid: b.dataset.dec, accept: false }); renderGroups(); });
-    const gs = myGroups(), L = $('#grpList');
+    const gs = isAdmin() ? dir.groups.slice() : myGroups(), L = $('#grpList');      // the admin sees every group here
+    const canDel = g => isAdmin() || g.members.some(m => m.id === A.user.id && m.role === 'owner');
     L.innerHTML = gs.length ? gs.map(g => `<div class="card"><b>${esc(groupLabel(g))}</b>${'g:' + g.gid === wsId ? '<span class="chip g">open now</span>' : ''}
       <div class="hint">Members</div>${g.members.map(m => `<div class="act">${esc(m.name)} • ${esc(m.id)}${m.role === 'owner' ? ' ★' : ''}</div>`).join('')}
       ${dir.requests.filter(q => q.gid === g.gid).map(q => `<div class="act">⏳ Waiting: ${esc(q.toName)} (${esc(q.to)}), invited by ${esc(q.fromName)}</div>`).join('')}
-      <div class="sm2" style="margin-top:8px"><input list="dlUsers" placeholder="ID (mobile) of the user to invite" data-inv="${esc(g.gid)}"><button class="b sm" data-send="${esc(g.gid)}">Send request</button></div>
+      ${isMemberOf(g) ? `<div class="sm2" style="margin-top:8px"><input list="dlUsers" placeholder="ID (mobile) of the user to invite" data-inv="${esc(g.gid)}"><button class="b sm" data-send="${esc(g.gid)}">Send request</button></div>` : '<div class="hint">You are not a member of this group (admin view).</div>'}
       <button class="b alt sm" data-use="${esc(g.gid)}" style="margin-top:8px">Open this group</button>
-      <button class="b alt sm" data-ren="${esc(g.gid)}" style="margin-top:8px">Rename</button>
-      <button class="b red sm" data-leave="${esc(g.gid)}" style="margin-top:8px">Leave</button><div class="msg" data-gm="${esc(g.gid)}"></div></div>`).join('')
+      ${isMemberOf(g) ? `<button class="b alt sm" data-ren="${esc(g.gid)}" style="margin-top:8px">Rename</button>
+      <button class="b alt sm" data-leave="${esc(g.gid)}" style="margin-top:8px">Leave</button>` : ''}
+      ${canDel(g) ? `<button class="b red sm" data-delgrp="${esc(g.gid)}" data-gn="${esc(groupLabel(g))}" style="margin-top:8px">🗑 Delete group</button>` : ''}<div class="msg" data-gm="${esc(g.gid)}"></div></div>`).join('')
       : '<div class="card"><p class="hint">You are not in any group yet. Create one above, or accept an invitation.</p></div>';
     L.querySelectorAll('[data-send]').forEach(b => b.onclick = async () => {
       const gid = b.dataset.send, inp = L.querySelector('[data-inv="' + gid + '"]'), msg = L.querySelector('[data-gm="' + gid + '"]');
@@ -990,6 +1090,14 @@
     L.querySelectorAll('[data-ren]').forEach(b => b.onclick = async () => {
       const g = gs.find(x => x.gid === b.dataset.ren), n = prompt('Group name', g.name); if (n === null) return;
       await act('renameGroup', { gid: g.gid, name: n }); renderGroups();
+    });
+    L.querySelectorAll('[data-delgrp]').forEach(b => b.onclick = async () => {
+      if (!confirm('Delete the group “' + b.dataset.gn + '”?\n\nIts members are removed and ALL its answer keys, results and question papers are deleted for everybody. Personal workspaces are not touched.\n\nThis cannot be undone.')) return;
+      const gid = b.dataset.delgrp, wid = 'g:' + gid;
+      outbox = outbox.filter(o => !(o.payload && o.payload.wid === wid)); LS.set('omr_out', outbox);      // nothing more to upload to a group that is going away
+      await flush();
+      const r = await act('deleteGroup', { gid });
+      if (r.ok) { try { localStorage.removeItem(wsKey(wid)); localStorage.removeItem('omr_pi_' + wid); } catch (e) { /* ignore */ } if (wsId === wid) loadWs(personalWid()); fillWsSel(); renderGroups(); toast('Group deleted.'); }
     });
     L.querySelectorAll('[data-leave]').forEach(b => b.onclick = async () => {
       if (!confirm('Leave this group? You will no longer see its answer keys and results.')) return;
@@ -1106,7 +1214,7 @@
     images: () => paperImages,
     savePaper(p, imgs) { papers[p.id] = p; (imgs || []).forEach(m => { paperImages[m.id] = m.data; }); saveWsCache(); return queue('savePaper', { wid: wsId, paper: p, images: imgs || [] }, 'paper:' + p.id); },
     deletePaper(id) { delete papers[id]; saveWsCache(); queue('deletePaper', { wid: wsId, id }, 'paper:' + id); },
-    saveKey(k) { keys[k.id] = k; saveKeys(); fillSelects(); renderKey(); return queue('saveKey', { wid: wsId, key: k }, 'key:' + k.id); }
+    saveKey(k) { const old = keys[k.id]; if (old && old.sections && k.sections === undefined) k = Object.assign({}, k, { sections: old.sections }); keys[k.id] = k; saveKeys(); fillSelects(); renderKey(); return queue('saveKey', { wid: wsId, key: k }, 'key:' + k.id); }
   };
   window.__omr = { get state() { return { S, keys, results, sc, keyState, customTpls, wiz }; } }; // for debugging / tests
 })();
