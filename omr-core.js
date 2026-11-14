@@ -202,37 +202,14 @@
       }
     return best;
   }
-  // Contrast stretch (0.3% darkest .. 99% brightest -> 0..255): rescues dim, washed-out or low-contrast photos
-  function stretch(g) {
-    const hs = new Uint32Array(256), n = g.length;
-    for (let i = 0; i < n; i++) hs[g[i]]++;
-    let lo = 0, a = 0; while (lo < 254 && (a += hs[lo]) < n * 0.003) lo++;
-    let hi = 255; a = 0; while (hi > 1 && (a += hs[hi]) < n * 0.01) hi--;
-    if (hi - lo < 25) return g;
-    const k = 255 / (hi - lo), out = new Uint8Array(n);
-    for (let i = 0; i < n; i++) { const v = (g[i] - lo) * k; out[i] = v < 0 ? 0 : v > 255 ? 255 : v; }
-    return out;
-  }
-  // quick = true (live camera, every frame): few attempts so the preview stays smooth.
-  // quick = false: many thresholds, contrast-stretched image, and finally a relaxed shape check.
-  function findMarkers(gray, w, h, aspect, quick) {
+  function findMarkers(gray, w, h, aspect) {
     const big = Math.max(w, h);
-    const tries = [[big / 16, 0.55], [big / 16, 0.7], [big / 10, 0.45], [big / 24, 0.8], [big / 8, 0.35], [big / 12, 0.62], [big / 20, 0.72], [big / 6, 0.3]];
-    const run = (g, asp, list) => {
-      for (const t of list) {
-        const q = pickQuad(markerCands(g, w, h, Math.max(15, Math.round(t[0])), t[1]), w, h, asp);
-        if (q) return q;
-      }
-      return null;
-    };
-    let q = run(gray, aspect, quick ? tries.slice(0, 3) : tries.slice(0, 5));
-    if (q) return q;
-    const st = stretch(gray);
-    if (st !== gray) { q = run(st, aspect, quick ? [tries[0], tries[2]] : tries); if (q) return q; }
-    if (quick) return null;
-    q = run(gray, aspect, tries.slice(5)); if (q) return q;
-    // last resort: no aspect-ratio condition (odd perspective / the template's ratio is unknown)
-    if (aspect) { q = run(st, 0, tries.slice(0, 5)); if (q) return q; }
+    // Several thresholds / window sizes: the first one that gives four consistent squares wins
+    const tries = [[big / 16, 0.55], [big / 16, 0.7], [big / 10, 0.45], [big / 24, 0.8], [big / 8, 0.35]];
+    for (const t of tries) {
+      const q = pickQuad(markerCands(gray, w, h, Math.max(15, Math.round(t[0])), t[1]), w, h, aspect);
+      if (q) return q;
+    }
     return null;
   }
 
@@ -320,31 +297,66 @@
     const n = collect(g, W, H, cx, cy, rx, ry, n0, n1); if (!n) return 255;
     const v = BUF.subarray(0, n); v.sort(); return v[Math.min(n - 1, Math.floor(p * n))];
   }
-  // Per bubble: darkness = 1 - (inner brightness / surrounding paper brightness) and fill = share of the inner disc that is inked.
-  // "Inked" is judged against the bubble's own darkest level (half way between paper and its darkest part, at least 18% below paper),
-  // so a light pencil mark that is completely filled still reads as 100% while a half shaded / ticked / dotted bubble reads as partial.
-  // The sheet-wide median is subtracted from both (removes printed letters inside bubbles etc.)
+  // Share of a disc (radius rin * bubble radius) that is THICK ink: a pixel counts only when at least 75% of the (2e+1)x(2e+1) block around it is ink.
+  // Printed letters, ring arcs, thin ticks, dust and pen specks are only a few pixels wide and vanish; a filled-in bubble stays.
+  function thickFrac(g, W, H, cx, cy, rx, ry, rin, cut) {
+    const e = Math.max(1, Math.round(0.14 * rx)), hx = Math.ceil(rin * rx), hy = Math.ceil(rin * ry), X = Math.round(cx), Y = Math.round(cy), need = Math.ceil(0.75 * (2 * e + 1) * (2 * e + 1));
+    let tot = 0, thick = 0;
+    for (let dy = -hy; dy <= hy; dy++) for (let dx = -hx; dx <= hx; dx++) {
+      const ex = dx / (rin * rx), ey = dy / (rin * ry); if (ex * ex + ey * ey > 1) continue;
+      tot++; let k = 0;
+      for (let j = -e; j <= e; j++) { const yy = Y + dy + j; if (yy < 0 || yy >= H) continue; for (let i = -e; i <= e; i++) { const xx = X + dx + i; if (xx >= 0 && xx < W && g[yy * W + xx] < cut) k++; } }
+      if (k >= need) thick++;
+    }
+    return tot ? thick / tot : 0;
+  }
+  // The printed ring is the best guide to where a bubble really is in the photo (bent page, small print shifts, lens bend).
+  // Try small shifts and keep the one where the ring is darkest (the ring is still there when the bubble is filled in).
+  function recentre(g, W, H, cx, cy, rx, ry) {
+    const lim = 0.32, st = 0.1, ang = 18, rad = [0.85, 0.95, 1.05];
+    let best = null, none = 0, nn = 0;
+    for (let oy = -lim; oy <= lim + 1e-9; oy += st) for (let ox = -lim; ox <= lim + 1e-9; ox += st) {
+      let s = 0, n = 0;
+      for (let a = 0; a < ang; a++) { const t = a * 2 * Math.PI / ang, ct = Math.cos(t), sn = Math.sin(t);
+        for (let k = 0; k < rad.length; k++) { const x = Math.round(cx + (ox + rad[k] * ct) * rx), y = Math.round(cy + (oy + rad[k] * sn) * ry); if (x >= 0 && y >= 0 && x < W && y < H) { s += g[y * W + x]; n++; } } }
+      if (!n) continue; s /= n;
+      if (Math.abs(ox) < 1e-6 && Math.abs(oy) < 1e-6) none = s;
+      if (!best || s < best.s) best = { s, ox, oy };
+      nn += s;
+    }
+    if (!best) return [cx, cy];
+    return best.s < none - 6 ? [cx + best.ox * rx, cy + best.oy * ry] : [cx, cy];      // only move when the ring clearly fits better
+  }
+  // Per bubble, measured on the INNER disc only (half the bubble radius), so the printed ring, a slightly shifted grid or a bent page never counts:
+  //   paper = the local paper brightness around the bubble (40th percentile of a ring outside it: robust to shadows and neighbours)
+  //   ink   = a pixel at least 60% darker than that paper (pen-black, not grey), and THICK: at least 75% of the pixels around it (a ~5x5 block) are ink too. Only a really filled-in bubble gets there;
+  //           light pencil, ghost marks, smudges, shadows, dust, thin ticks and the printed letters inside the bubbles do not.
+  //   fill  = share of the inner disc that is thick ink,  core = share of the very centre that is thick ink (a real mark covers the centre;
+  //           specks, thin ticks and ring arcs do not),  dark = how much darker the inner disc is than the paper
+  // The sheet-wide median is subtracted from both (removes printed letters inside every bubble).
   function sampleBubbles(g, W, H, tpl) {
-    const dk = [], fl = [], rw = [];
+    const dk = [], fl = [], rw = [], cr = [];
     tpl.groups.forEach(gr => {
-      const d = [], f = [];
-      gr.pts.forEach(p => {
-        const ring = Math.max(1, statPct(g, W, H, p[0], p[1], tpl.rx, tpl.ry, 1.35, 1.9, 0.65));
-        const n = collect(g, W, H, p[0], p[1], tpl.rx, tpl.ry, 0, 0.7);
-        let fr = 0;
-        if (n) {
-          const v = BUF.subarray(0, n), sorted = Float32Array.from(v).sort(), low = sorted[Math.floor(n * 0.05)];
-          const cut = ring - Math.max(0.5 * (ring - low), 0.18 * ring);
-          let ink = 0; for (let i = 0; i < n; i++) if (v[i] < cut) ink++;
-          fr = ink / n;
-        }
-        const inner = statMean(g, W, H, p[0], p[1], tpl.rx, tpl.ry, 0, 0.5);
-        d.push(Math.max(0, 1 - inner / ring)); f.push(fr);
+      const d = [], f = [], r = [], c = [];
+      gr.pts.forEach(p0 => {
+        const p = recentre(g, W, H, p0[0], p0[1], tpl.rx, tpl.ry);
+        const paper = Math.max(1, statPct(g, W, H, p[0], p[1], tpl.rx, tpl.ry, 1.35, 1.9, 0.4));
+        const n = collect(g, W, H, p[0], p[1], tpl.rx, tpl.ry, 0, 0.5), cut = paper * 0.4;
+        let sum = 0; for (let i = 0; i < n; i++) sum += BUF[i];
+        const dd = n ? Math.max(0, 1 - (sum / n) / paper) : 0;
+        d.push(dd); f.push(thickFrac(g, W, H, p[0], p[1], tpl.rx, tpl.ry, 0.5, cut)); r.push(dd); c.push(thickFrac(g, W, H, p[0], p[1], tpl.rx, tpl.ry, 0.3, cut));
       });
-      dk.push(d); fl.push(f); rw.push(d.slice());
+      dk.push(d); fl.push(f); rw.push(r); cr.push(c);
     });
-    const norm = (m, scale) => { const flat = []; m.forEach(r => r.forEach(v => flat.push(v))); const base = med(flat), k = scale ? 1 / Math.max(0.2, 1 - base) : 1; return m.map(r => r.map(v => Math.min(1, Math.max(0, v - base) * k))); };
-    return { dark: norm(dk, false), fill: norm(fl, true), raw: rw };
+    // Remove what every EMPTY bubble already shows (printed letters / numbers inside the bubbles). The level is taken per option column
+    // (the printed 'a' can be heavier than the printed 'c'), but never more than 0.15 above the sheet-wide median, so a column that
+    // most students marked cannot cancel out its own marks.
+    const norm = m => {
+      const flat = [], cols = []; m.forEach(r => r.forEach((v, o) => { flat.push(v); (cols[o] = cols[o] || []).push(v); }));
+      const all = med(flat), base = cols.map(c => Math.min(med(c), all + 0.15));
+      return m.map(r => r.map((v, o) => Math.min(1, Math.max(0, v - base[o]) / Math.max(0.2, 1 - base[o]))));
+    };
+    return { dark: norm(dk), fill: norm(fl), raw: rw, core: norm(cr) };
   }
   function sampleTemplate(g, W, H, tpl) { return sampleBubbles(g, W, H, tpl).dark; }
   // Alignment quality: do the printed (dark) bubble outlines land where the template says?
@@ -369,21 +381,21 @@
       return res;
     });
   }
-  // Strict reading of every question.
-  //  touched bubble = anything inked (fill >= touch) or dark enough (dark >= thr)
-  //  full mark      = touched, the inner disc is at least fillMin covered AND it is dark enough (raw darkness >= fullRaw; a faint grey wash is not a full mark)
-  //  A question is INVALID (counted wrong) when it has a partly filled bubble or more than one touched bubble.
+  // Strict reading of every question - only real ink counts.
+  //  touched bubble = the inner disc has thick ink (fill >= thr, default 30%), the centre has thick ink (core >= 45%) AND the disc is really dark (raw >= 40%, and clearly darker than the empty bubbles: dark >= 40%)
+  //  full mark      = touched, the inner disc is at least fillMin covered AND really dark (raw darkness >= fullRaw)
+  //  A question is INVALID (counted wrong) when it has a partly filled bubble, more than one touched bubble, or 3+ touched (shadow / scribble).
   // returns { sel: [[options]], bad: [bool], partial: [[options]] }
-  function analyze(dark, fill, o, raw) {
+  function analyze(dark, fill, o, raw, core) {
     o = o || {};
-    const thr = o.thr || 0.18, fillMin = o.fillMin || 0.7, touch = o.touch || 0.25, fullRaw = o.fullRaw || 0.45;
+    const thr = o.thr || 0.3, fillMin = o.fillMin || 0.7, touch = Math.max(0.25, o.touch || thr), fullRaw = o.fullRaw || 0.5, coreMin = o.coreMin || 0.45, rawMin = o.rawMin || 0.4, darkMin = o.darkMin || 0.4;
     const sel = [], bad = [], partial = [];
     dark.forEach((row, q) => {
       const s = [], p = [];
       row.forEach((d, i) => {
         const f = fill && fill[q] ? fill[q][i] : d;
-        if (f >= touch || d >= thr) { s.push(i); const rr = raw && raw[q] ? raw[q][i] : d + 0.15;
-          if (f < fillMin || rr < fullRaw) p.push(i); }
+        const cc = core && core[q] ? core[q][i] : 1, rr = raw && raw[q] ? raw[q][i] : d + 0.4;
+        if (f >= touch && cc >= coreMin && rr >= rawMin && d >= darkMin) { s.push(i); if (f < fillMin || rr < fullRaw) p.push(i); }
       });
       sel.push(s); partial.push(p); bad.push(p.length > 0 || s.length > 1);
     });
@@ -514,7 +526,7 @@
     }
     const warped = warpRGBA(rgba, w, h, Hm, tpl.W, tpl.H);
     const sm = sampleBubbles(g, tpl.W, tpl.H, tpl);
-    return { found: true, how, rot, fit, ambiguous, quad: q, warped, dark: sm.dark, fill: sm.fill, raw: sm.raw, learned };
+    return { found: true, how, rot, fit, ambiguous, quad: q, warped, dark: sm.dark, fill: sm.fill, raw: sm.raw, core: sm.core, learned };
   }
 
   // ---------- Building a template from a photo of a blank sheet ----------
