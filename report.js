@@ -1,8 +1,8 @@
 /* report.js - result sheets drawn on canvas and saved as a real PDF file (no libraries, works offline). */
 (function (root) {
   'use strict';
-  const PW = 1240, PH = 1754, M = 70;              // A4 layout units (150 dpi grid)
-  const SC = 2;                                    // render scale: 2 -> 300 dpi pixels, sharp when zoomed
+  const PW = 1240, PH = 1754, M = 70;              // A4 layout units (150 per inch); the canvas is drawn SC times bigger so zooming into the PDF stays sharp
+  let SC = 2.4;                                      // 2.4 -> 360 dpi (2976 x 4210 pixels per page)
   const GREEN = '#5b8f2a', RED = '#e11d1d', BLACK = '#000';
   const FF = '"Times New Roman","Noto Serif Bengali","Noto Sans Bengali","Nirmala UI","Kohinoor Bangla","Liberation Serif",serif';
   const font = (sz, b) => (b ? 'bold ' : '') + sz + 'px ' + FF;
@@ -10,8 +10,9 @@
   const pad2 = n => String(n).padStart(2, '0');
 
   function newPage() {
-    const c = document.createElement('canvas'); c.width = PW * SC; c.height = PH * SC;
-    const x = c.getContext('2d'); x.scale(SC, SC); x.imageSmoothingQuality = 'high'; x.fillStyle = '#fff'; x.fillRect(0, 0, PW, PH); x.textBaseline = 'middle'; x.textAlign = 'center';
+    let c = document.createElement('canvas'), x = null;
+    for (; SC >= 1; SC = Math.max(1, SC - 0.6)) { c.width = Math.round(PW * SC); c.height = Math.round(PH * SC); x = c.getContext('2d'); if (x) break; if (SC <= 1) break; }   // a phone that cannot make a canvas this big gets a smaller one
+    x.setTransform(SC, 0, 0, SC, 0, 0); x.fillStyle = '#fff'; x.fillRect(0, 0, PW, PH); x.textBaseline = 'middle'; x.textAlign = 'center';
     return { c, x };
   }
   function fit(x, text, maxW, size, bold, min) {
